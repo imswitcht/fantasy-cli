@@ -1,0 +1,6 @@
+requests>=2.31
+click>=8.1
+rich>=13.7          # optional - plain-text fallback if absent
+# Yahoo only. Skip these two if you drop the Yahoo team.
+yahoo_fantasy_api>=2.9
+yahoo_oauth>=2.0

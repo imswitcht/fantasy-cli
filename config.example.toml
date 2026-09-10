@@ -1,0 +1,32 @@
+# Copy to config.toml and fill in your teams.
+season = 2026
+
+# Don't write unless the projected gain clears this. 0 = write any improvement.
+min_gain_to_write = 0.0
+
+[[teams]]
+provider  = "yahoo"
+nickname  = "Work league"
+# From `ff teams --discover`, looks like "449.l.123456"
+league_id = "449.l.000000"
+# Full team key, looks like "449.l.123456.t.4"
+team_id   = "449.l.000000.t.1"
+
+[[teams]]
+provider  = "espn"
+nickname  = "College buddies"
+# From your team URL: fantasy.espn.com/football/team?leagueId=123456&teamId=3
+league_id = "123456"
+team_id   = "3"
+
+[[teams]]
+provider  = "sleeper"
+nickname  = "Dynasty"
+league_id = "000000000000000000"
+team_id   = "1"
+
+[[teams]]
+provider  = "sleeper"
+nickname  = "Redraft"
+league_id = "000000000000000000"
+team_id   = "1"

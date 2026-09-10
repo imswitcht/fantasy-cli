@@ -1,0 +1,27 @@
+# Secrets — never commit these
+.env
+secrets/
+*.token.json
+yahoo_token.json
+
+# Local state
+.cache/
+logs/
+changes.log
+
+# Your real league/team ids. config.example.toml is the committed template.
+config.toml
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
