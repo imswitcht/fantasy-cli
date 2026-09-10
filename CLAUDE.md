@@ -64,6 +64,12 @@ Enforced in three layers, all of which must stay:
 - Never commit `.env`, `secrets/`, or `config.toml`. Check `git status` before
   any commit; a real bug once staged `config.toml` because .gitignore does not
   support trailing comments on a pattern line.
+- `ff tui` (`ff/tui.py`) has one write path: click a starter and a bench
+  player to swap them. It's gated on `provider.capabilities.can_write_lineup`
+  (today, effectively ESPN only) and always shows a confirm dialog with the
+  projected point change before calling `ff/writer.py`'s `commit()` — the same
+  read → recompute → submit → verify path `--apply` uses. Don't add a way to
+  skip that confirm step.
 
 ## Testing
 

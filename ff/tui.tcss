@@ -33,15 +33,10 @@ TabbedContent Tab.-active {
     padding: 0 1;
 }
 
-Collapsible {
-    background: #0e1015;
-    border: none;
-    margin: 1 1 0 1;
-}
-
-Collapsible > .collapsible--title {
+.section-label {
     color: #8b93a1;
     text-style: bold;
+    margin: 1 1 0 2;
 }
 
 #bench-rows {
@@ -49,12 +44,20 @@ Collapsible > .collapsible--title {
 }
 
 .player-row {
-    height: 3;
+    height: 1;
     background: #181b21;
-    border: round #21252d;
-    margin-bottom: 1;
+    border-bottom: solid #21252d;
     padding: 0 1;
     align: left middle;
+}
+
+.player-row.writable:hover {
+    background: #1c2027;
+}
+
+.player-row.selected {
+    background: #212430;
+    border-bottom: solid #7c5cff;
 }
 
 .badge {
@@ -91,4 +94,30 @@ Collapsible > .collapsible--title {
 .player-status {
     width: 12;
     content-align: right middle;
+}
+
+SwapConfirmScreen {
+    align: center middle;
+}
+
+#swap-dialog {
+    width: 60;
+    height: auto;
+    background: #14171d;
+    border: round #7c5cff;
+    padding: 1 2;
+}
+
+#swap-dialog .swap-line {
+    padding: 0 0 1 0;
+}
+
+#swap-buttons {
+    height: auto;
+    align: right middle;
+    padding-top: 1;
+}
+
+#swap-buttons Button {
+    margin-left: 1;
 }
