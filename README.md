@@ -8,9 +8,14 @@ projection source, and writes changes back where the platform allows it.
 
 | Platform | Read | Write lineups | Status |
 |---|---|---|---|
-| **Yahoo** | yes | **yes** | Official OAuth 2.0 API with documented write support. Safe to automate. |
 | **ESPN** | yes | yes, unofficially | No public API. Uses your own session cookies against the endpoint the ESPN website uses. Works today; can break whenever ESPN ships. |
 | **Sleeper** | yes | **no** | Sleeper's API is read-only by design. There is no supported write path, and this tool does not pretend otherwise. |
+| **Yahoo** | needs approval | needs approval **and** a special request | Yahoo no longer self-serves Fantasy Sports API access - the permission is gone from the app-creation form. You must apply at https://sports.yahoo.com/developer/access/ . Yahoo states the API "currently provides read access only. Write access is not available at this time"; write must be requested explicitly in the application's notes. |
+
+The Yahoo driver in `ff/providers/yahoo.py` is complete and targets Yahoo's
+official documented endpoints. It cannot run until Yahoo provisions your app,
+and its write half needs Yahoo to additionally approve read/write. Read
+`write_status="official"` in that driver as "official *if* provisioned".
 
 For Sleeper, `ff sub-plan` computes the starter/backup pairings you should put
 into **Sleeper's own AutoSubs feature**, which does the inactive-player swap for
@@ -20,7 +25,8 @@ breaks every few weeks.
 Worth knowing before you rely on any of this: **Yahoo and Sleeper both already
 have built-in inactive-player protection** (Yahoo's "Start Active Players",
 Sleeper's AutoSubs). ESPN does not. So the autopilot's real value is on the
-ESPN team — which is also the one with the least stable write path. That irony
+ESPN team — which is also the one with the least stable write path, and the
+only one you can write to at all right now. That irony
 is the honest shape of the problem.
 
 Where this tool clearly beats all three platforms' built-in features: it
@@ -125,7 +131,7 @@ ff/
   writer.py         the read-recompute-submit-verify path
   cli.py            commands
   ui.py             rich, with a plain-text fallback
-tests/              27 tests covering optimizer, locks and crosswalk
+tests/              49 tests: optimizer, locks, eligibility matrix, crosswalk, fuzz
 scripts/            PowerShell autopilot + Task Scheduler registration
 ```
 

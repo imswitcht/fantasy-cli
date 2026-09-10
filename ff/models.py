@@ -32,7 +32,22 @@ class Slot(str, Enum):
         return self not in (Slot.BENCH, Slot.IR)
 
 
-# Which positions may legally occupy each slot.
+# The only positions that exist. Anything a provider hands back that isn't in
+# here is discarded rather than trusted -- see Player.__post_init__.
+VALID_POSITIONS: frozenset[str] = frozenset({"QB", "RB", "WR", "TE", "K", "DEF"})
+
+# Which positions may legally occupy each slot. This table is the single source
+# of truth for lineup legality; nothing else in the codebase decides it.
+#
+#   QB   -> QB only (plus SUPERFLEX, in leagues that have one)
+#   RB   -> RB, FLEX, RB/WR, SUPERFLEX
+#   WR   -> WR, FLEX, RB/WR, WR/TE, SUPERFLEX
+#   TE   -> TE, FLEX, WR/TE, SUPERFLEX
+#   K    -> K only
+#   DEF  -> DEF only
+#
+# A WR can never fill TE, QB, K or DEF. A RB can never fill WR. And so on --
+# a player's position is what it is, regardless of what a platform's API says.
 SLOT_ELIGIBILITY: dict[Slot, set[str]] = {
     Slot.QB: {"QB"},
     Slot.RB: {"RB"},
@@ -44,9 +59,18 @@ SLOT_ELIGIBILITY: dict[Slot, set[str]] = {
     Slot.WRRB: {"RB", "WR"},
     Slot.WRTE: {"WR", "TE"},
     Slot.SUPERFLEX: {"QB", "RB", "WR", "TE"},
-    Slot.BENCH: {"QB", "RB", "WR", "TE", "K", "DEF"},
-    Slot.IR: {"QB", "RB", "WR", "TE", "K", "DEF"},
+    Slot.BENCH: set(VALID_POSITIONS),
+    Slot.IR: set(VALID_POSITIONS),
 }
+
+
+class IllegalLineup(ValueError):
+    """A plan tried to put a player in a slot they cannot legally fill.
+
+    This should be impossible. It is raised rather than silently corrected
+    because if it ever fires, a provider is misreporting eligibility and the
+    right response is to stop, not to guess.
+    """
 
 
 class Availability(str, Enum):
@@ -94,8 +118,38 @@ class Player:
     slot: Slot = Slot.BENCH
 
     def __post_init__(self) -> None:
-        if not self.eligible_positions:
-            self.eligible_positions = {self.position}
+        # Never trust provider-supplied eligibility. ESPN in particular has two
+        # colliding id spaces, and a mis-decode there once made every wide
+        # receiver look kicker-eligible. Anything that isn't a real position is
+        # dropped, and the player's own position is always included.
+        self.position = (self.position or "").upper().replace("DST", "DEF").replace("D/ST", "DEF")
+        cleaned = {
+            p.upper().replace("DST", "DEF").replace("D/ST", "DEF")
+            for p in (self.eligible_positions or set())
+        }
+        cleaned &= VALID_POSITIONS
+        if self.position in VALID_POSITIONS:
+            cleaned.add(self.position)
+
+        # Kickers and defenses are exclusive -- no real player is both a kicker
+        # and a receiver, so a provider claiming that is wrong by definition.
+        # Skill positions genuinely can be dual (RB/WR, and Taysom Hill is a
+        # real QB/TE), so those are allowed to mix among themselves only.
+        if self.position == "K":
+            cleaned = {"K"}
+        elif self.position == "DEF":
+            cleaned = {"DEF"}
+        else:
+            cleaned &= {"QB", "RB", "WR", "TE"}
+
+        self.eligible_positions = cleaned or ({self.position}
+                                              if self.position in VALID_POSITIONS
+                                              else set())
+
+    @property
+    def legal_slots(self) -> set[Slot]:
+        """Every slot this player may legally occupy."""
+        return {s for s in Slot if self.can_fill(s)}
 
     @property
     def is_locked(self) -> bool:

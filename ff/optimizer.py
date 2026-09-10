@@ -19,8 +19,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from .models import (SLOT_ELIGIBILITY, Availability, LineupPlan, Move, Player,
-                     Roster, Slot, TeamRef)
+from .models import (SLOT_ELIGIBILITY, Availability, IllegalLineup, LineupPlan,
+                     Move, Player, Roster, Slot, TeamRef)
 
 # Haircut applied to a questionable player's projection. Crude, but it stops the
 # optimizer from benching a healthy 11-point player for a questionable 11.2.
@@ -90,9 +90,54 @@ def _assign(candidates: list[Player], slots: list[Slot]) -> dict[int, Player]:
     return assignment
 
 
+def validate_plan(plan: LineupPlan) -> None:
+    """Refuse to emit a plan containing an illegal slot assignment.
+
+    The eligibility table in models.py is the only authority on legality. This
+    is a last line of defense: if a provider ever misreports what a player is,
+    we stop loudly here rather than submitting a lineup the platform will
+    reject -- or worse, accept.
+    """
+    for m in plan.moves:
+        if not m.to_slot.is_starting:
+            continue  # benching anyone is always legal
+        if not m.player.can_fill(m.to_slot):
+            raise IllegalLineup(
+                f"{m.player.name} is a {m.player.position} "
+                f"(eligible: {', '.join(sorted(m.player.eligible_positions)) or 'none'}) "
+                f"and cannot fill {m.to_slot.value}. "
+                f"This is a provider parsing bug -- please report it."
+            )
+
+    # A player must not be assigned to two slots at once.
+    seen: dict[str, Slot] = {}
+    for m in plan.moves:
+        if m.player.platform_id in seen and seen[m.player.platform_id] != m.to_slot:
+            raise IllegalLineup(
+                f"{m.player.name} assigned to both "
+                f"{seen[m.player.platform_id].value} and {m.to_slot.value}")
+        seen[m.player.platform_id] = m.to_slot
+
+
 def _build_plan(team: TeamRef, roster: Roster,
                 target: dict[int, Player], slots: list[Slot],
                 locked_notes: list[str]) -> LineupPlan:
+    # Belt and braces: nothing should ever reach here mis-assigned. Only check
+    # assignments that actually change something -- if a roster arrives with a
+    # player already sitting in a slot they can't legally fill, that is the
+    # platform's (or our parser's) problem to report, not a reason to crash and
+    # leave the user with no plan at all. Those get surfaced in `blocked`.
+    for idx, player in target.items():
+        slot = slots[idx]
+        if slot.is_starting and player.slot != slot and not player.can_fill(slot):
+            raise IllegalLineup(
+                f"{player.name} ({player.position}) was assigned to "
+                f"{slot.value}, which they cannot fill")
+        if slot.is_starting and player.slot == slot and not player.can_fill(slot):
+            locked_notes.append(
+                f"{player.name} ({player.position}) is already in a {slot.value} "
+                f"slot they should not be eligible for - check the league settings")
+
     before = sum(_score(p) for p in roster.starters)
 
     moves: list[Move] = []
@@ -109,13 +154,15 @@ def _build_plan(team: TeamRef, roster: Roster,
             moves.append(Move(player=p, from_slot=p.slot, to_slot=Slot.BENCH))
 
     after = sum(_score(p) for p in target.values())
-    return LineupPlan(
+    plan = LineupPlan(
         team=team,
         moves=moves,
         projected_before=round(before, 2),
         projected_after=round(after, 2),
         blocked=locked_notes,
     )
+    validate_plan(plan)
+    return plan
 
 
 def _split_locked(roster: Roster, slots: list[Slot]) -> tuple[list[Slot], dict[int, Player], list[str]]:
@@ -187,7 +234,11 @@ def plan_inactive_swaps(team: TeamRef, roster: Roster) -> LineupPlan:
             continue
 
         used.add(current.platform_id)
-        if current.is_locked or not current.availability.is_dead_weight:
+        # Treat an ineligible incumbent exactly like an inactive one: he is
+        # scoring nothing useful in a slot he shouldn't be in, so replace him.
+        ineligible = not current.can_fill(slot)
+        if current.is_locked or (not current.availability.is_dead_weight
+                                 and not ineligible):
             target[idx] = current
             continue
 

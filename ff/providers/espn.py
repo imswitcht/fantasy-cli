@@ -51,6 +51,11 @@ for _id, _slot in SLOT_BY_ID.items():
 
 POSITION_BY_ID = {1: "QB", 2: "RB", 3: "WR", 4: "TE", 5: "K", 16: "DEF"}
 
+# Slots that map to exactly one position. Only these may add a position to a
+# player's eligibility -- multi-position slots (FLEX, WR/TE, RB/WR, OP) say
+# where a player may be *placed*, not what he *is*.
+SINGLE_POSITION_SLOTS = {Slot.QB, Slot.RB, Slot.WR, Slot.TE, Slot.K, Slot.DEF}
+
 PRO_TEAM_ABBR = {
     0: "FA", 1: "ATL", 2: "BUF", 3: "CHI", 4: "CIN", 5: "CLE", 6: "DAL", 7: "DEN",
     8: "DET", 9: "GB", 10: "TEN", 11: "IND", 12: "KC", 13: "LV", 14: "LAR", 15: "MIA",
@@ -279,9 +284,20 @@ def _parse_player(entry: dict, week: int,
 
     slot = SLOT_BY_ID.get(entry.get("lineupSlotId"), Slot.BENCH)
     pos = POSITION_BY_ID.get(p.get("defaultPositionId"), "UNKNOWN")
-    eligible = {POSITION_BY_ID[s] for s in p.get("eligibleSlots", [])
-                if s in POSITION_BY_ID}
-    eligible.add(pos)
+
+    # CAREFUL: ESPN has two unrelated id spaces. `defaultPositionId` is a
+    # POSITION id (1=QB, 2=RB, 3=WR, 4=TE, 5=K, 16=DEF). `eligibleSlots` is a
+    # list of LINEUP SLOT ids (0=QB, 2=RB, 3=RB/WR, 4=WR, 5=WR/TE, 6=TE,
+    # 17=K, 23=FLEX). Reading eligibleSlots through the position table makes
+    # every WR look kicker-eligible, because slot 5 (WR/TE) collides with
+    # position 5 (K). Resolve slots through SLOT_BY_ID, and let only
+    # single-position slots contribute a position -- a WR being FLEX-eligible
+    # must not make him RB-eligible.
+    eligible = {pos}
+    for slot_id in p.get("eligibleSlots", []):
+        candidate = SLOT_BY_ID.get(slot_id)
+        if candidate in SINGLE_POSITION_SLOTS:
+            eligible.add(candidate.value)
 
     proj = None
     for stat in p.get("stats", []):

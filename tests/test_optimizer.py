@@ -307,3 +307,254 @@ class TestSubPairings(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestEspnEligibilityParsing(unittest.TestCase):
+    """Regression: ESPN's eligibleSlots are LINEUP SLOT ids, not POSITION ids.
+
+    Slot 5 is WR/TE; position 5 is K. Reading eligibleSlots through the position
+    table made every WR kicker-eligible, and the optimizer duly suggested
+    starting a wide receiver at K.
+    """
+
+    def _parse(self, default_position_id, eligible_slots):
+        from ff.providers.espn import _parse_player
+        entry = {
+            "lineupSlotId": 20,
+            "playerPoolEntry": {"player": {
+                "id": 1, "fullName": "Test Player",
+                "defaultPositionId": default_position_id,
+                "eligibleSlots": eligible_slots,
+                "proTeamId": 12, "stats": [], "injuryStatus": "ACTIVE",
+            }},
+        }
+        return _parse_player(entry, week=1, kickoffs={})
+
+    def test_wide_receiver_is_not_kicker_eligible(self):
+        # A real ESPN WR: RB/WR(3), WR(4), WR/TE(5), BE(20), IR(21), FLEX(23)
+        wr = self._parse(3, [3, 4, 5, 20, 21, 23])
+        self.assertEqual(wr.position, "WR")
+        self.assertNotIn("K", wr.eligible_positions)
+        self.assertFalse(wr.can_fill(Slot.K))
+
+    def test_wide_receiver_is_not_running_back_eligible(self):
+        """FLEX eligibility says where he may be placed, not what he is."""
+        wr = self._parse(3, [3, 4, 5, 20, 21, 23])
+        self.assertNotIn("RB", wr.eligible_positions)
+        self.assertFalse(wr.can_fill(Slot.RB))
+        self.assertTrue(wr.can_fill(Slot.FLEX))
+        self.assertTrue(wr.can_fill(Slot.WR))
+
+    def test_kicker_is_kicker_eligible(self):
+        k = self._parse(5, [17, 20, 21])
+        self.assertEqual(k.position, "K")
+        self.assertTrue(k.can_fill(Slot.K))
+        self.assertFalse(k.can_fill(Slot.FLEX))
+
+    def test_running_back_eligibility(self):
+        rb = self._parse(2, [2, 3, 20, 21, 23])
+        self.assertEqual(rb.position, "RB")
+        self.assertTrue(rb.can_fill(Slot.RB))
+        self.assertTrue(rb.can_fill(Slot.FLEX))
+        self.assertFalse(rb.can_fill(Slot.K))
+        self.assertFalse(rb.can_fill(Slot.WR))
+
+    def test_dual_eligible_rb_wr_keeps_both(self):
+        """A player ESPN lists for both the RB and WR slots really is both."""
+        dual = self._parse(2, [2, 3, 4, 20, 21, 23])
+        self.assertEqual({"RB", "WR"}, dual.eligible_positions)
+
+    def test_defense_and_qb(self):
+        d = self._parse(16, [16, 20, 21])
+        self.assertEqual(d.position, "DEF")
+        self.assertTrue(d.can_fill(Slot.DEF))
+        self.assertFalse(d.can_fill(Slot.FLEX))
+        qb = self._parse(1, [0, 20, 21])
+        self.assertEqual(qb.position, "QB")
+        self.assertTrue(qb.can_fill(Slot.QB))
+        self.assertFalse(qb.can_fill(Slot.FLEX))
+
+    def test_no_position_may_reach_a_foreign_single_slot(self):
+        cases = {
+            1: [0, 20, 21],          # QB
+            2: [2, 3, 20, 21, 23],   # RB
+            3: [3, 4, 5, 20, 21, 23],# WR
+            4: [5, 6, 20, 21, 23],   # TE
+            5: [17, 20, 21],         # K
+            16: [16, 20, 21],        # DEF
+        }
+        for pos_id, slots in cases.items():
+            p = self._parse(pos_id, slots)
+            for slot in (Slot.QB, Slot.RB, Slot.WR, Slot.TE, Slot.K, Slot.DEF):
+                expected = slot.value in p.eligible_positions
+                self.assertEqual(p.can_fill(slot), expected,
+                                 f"{p.position} vs {slot.value}")
+
+
+class TestPositionSlotTruthTable(unittest.TestCase):
+    """The complete legality matrix, asserted explicitly.
+
+    QB  -> QB, SUPERFLEX
+    RB  -> RB, FLEX, WRRB, SUPERFLEX
+    WR  -> WR, FLEX, WRRB, WRTE, SUPERFLEX
+    TE  -> TE, FLEX, WRTE, SUPERFLEX
+    K   -> K
+    DEF -> DEF
+    (BENCH and IR accept anyone.)
+    """
+
+    EXPECTED = {
+        "QB":  {Slot.QB, Slot.SUPERFLEX},
+        "RB":  {Slot.RB, Slot.FLEX, Slot.WRRB, Slot.SUPERFLEX},
+        "WR":  {Slot.WR, Slot.FLEX, Slot.WRRB, Slot.WRTE, Slot.SUPERFLEX},
+        "TE":  {Slot.TE, Slot.FLEX, Slot.WRTE, Slot.SUPERFLEX},
+        "K":   {Slot.K},
+        "DEF": {Slot.DEF},
+    }
+
+    def test_every_position_against_every_slot(self):
+        for pos, legal_starting in self.EXPECTED.items():
+            p = mk(f"{pos}-guy", pos, Slot.BENCH, 10)
+            expected = legal_starting | {Slot.BENCH, Slot.IR}
+            self.assertEqual(
+                p.legal_slots, expected,
+                f"{pos} legal slots wrong: got {sorted(s.value for s in p.legal_slots)}, "
+                f"want {sorted(s.value for s in expected)}")
+
+    def test_wr_cannot_fill_te_qb_k_or_def(self):
+        wr = mk("Receiver", "WR", Slot.BENCH, 15)
+        for forbidden in (Slot.TE, Slot.QB, Slot.K, Slot.DEF):
+            self.assertFalse(wr.can_fill(forbidden),
+                             f"WR must not fill {forbidden.value}")
+
+    def test_rb_only_rb_and_flex_family(self):
+        rb = mk("Runner", "RB", Slot.BENCH, 15)
+        self.assertTrue(rb.can_fill(Slot.RB))
+        self.assertTrue(rb.can_fill(Slot.FLEX))
+        for forbidden in (Slot.WR, Slot.TE, Slot.QB, Slot.K, Slot.DEF):
+            self.assertFalse(rb.can_fill(forbidden))
+
+    def test_qb_only_qb_and_superflex(self):
+        qb = mk("Passer", "QB", Slot.BENCH, 22)
+        self.assertTrue(qb.can_fill(Slot.QB))
+        self.assertTrue(qb.can_fill(Slot.SUPERFLEX))
+        for forbidden in (Slot.FLEX, Slot.RB, Slot.WR, Slot.TE, Slot.K,
+                          Slot.DEF, Slot.WRRB, Slot.WRTE):
+            self.assertFalse(qb.can_fill(forbidden))
+
+    def test_te_only_te_and_flex_family(self):
+        te = mk("TightEnd", "TE", Slot.BENCH, 12)
+        self.assertTrue(te.can_fill(Slot.TE))
+        self.assertTrue(te.can_fill(Slot.FLEX))
+        self.assertTrue(te.can_fill(Slot.WRTE))
+        for forbidden in (Slot.WR, Slot.RB, Slot.QB, Slot.K, Slot.DEF, Slot.WRRB):
+            self.assertFalse(te.can_fill(forbidden))
+
+    def test_kicker_and_defense_are_isolated(self):
+        k = mk("Kicker", "K", Slot.BENCH, 9)
+        d = mk("Defense", "DEF", Slot.BENCH, 8)
+        for slot in Slot:
+            if slot in (Slot.BENCH, Slot.IR):
+                continue
+            self.assertEqual(k.can_fill(slot), slot is Slot.K)
+            self.assertEqual(d.can_fill(slot), slot is Slot.DEF)
+
+
+class TestEligibilitySanitization(unittest.TestCase):
+    """Garbage from a provider must never widen a player's eligibility."""
+
+    def test_junk_positions_are_discarded(self):
+        p = Player(platform_id="1", name="X", position="WR",
+                   eligible_positions={"WR", "NONSENSE", "P", "LB"})
+        self.assertEqual(p.eligible_positions, {"WR"})
+
+    def test_provider_claiming_wr_is_kicker_eligible_is_overruled(self):
+        """Exactly the ESPN bug, blocked a second time at the model layer."""
+        p = Player(platform_id="1", name="X", position="WR",
+                   eligible_positions={"WR", "K", "DEF"})
+        self.assertEqual(p.eligible_positions, {"WR"})
+        self.assertFalse(p.can_fill(Slot.K))
+        self.assertFalse(p.can_fill(Slot.DEF))
+
+    def test_kicker_cannot_be_widened(self):
+        p = Player(platform_id="1", name="K", position="K",
+                   eligible_positions={"K", "WR", "RB", "TE"})
+        self.assertEqual(p.eligible_positions, {"K"})
+        self.assertFalse(p.can_fill(Slot.FLEX))
+
+    def test_real_dual_eligibility_survives(self):
+        rbwr = Player(platform_id="1", name="Dual", position="RB",
+                      eligible_positions={"RB", "WR"})
+        self.assertEqual(rbwr.eligible_positions, {"RB", "WR"})
+        hill = Player(platform_id="2", name="Taysom Hill", position="QB",
+                      eligible_positions={"QB", "TE"})
+        self.assertEqual(hill.eligible_positions, {"QB", "TE"})
+        self.assertTrue(hill.can_fill(Slot.TE))
+        self.assertTrue(hill.can_fill(Slot.QB))
+
+    def test_dst_spellings_normalize_to_def(self):
+        for spelling in ("DST", "D/ST", "DEF"):
+            p = Player(platform_id="1", name="D", position=spelling)
+            self.assertEqual(p.position, "DEF")
+            self.assertTrue(p.can_fill(Slot.DEF))
+
+    def test_primary_position_always_included(self):
+        p = Player(platform_id="1", name="X", position="TE",
+                   eligible_positions=set())
+        self.assertIn("TE", p.eligible_positions)
+
+
+class TestPlanValidation(unittest.TestCase):
+    def test_illegal_move_raises(self):
+        from ff.models import IllegalLineup
+        from ff.optimizer import validate_plan
+        wr = mk("Receiver", "WR", Slot.BENCH, 15)
+        plan = LineupPlanStub(moves=[Move(player=wr, from_slot=Slot.BENCH,
+                                          to_slot=Slot.K)])
+        with self.assertRaises(IllegalLineup):
+            validate_plan(plan)
+
+    def test_benching_anyone_is_legal(self):
+        from ff.optimizer import validate_plan
+        k = mk("Kicker", "K", Slot.K, 9)
+        plan = LineupPlanStub(moves=[Move(player=k, from_slot=Slot.K,
+                                          to_slot=Slot.BENCH)])
+        validate_plan(plan)  # must not raise
+
+    def test_optimizer_never_emits_illegal_lineup_under_fuzz(self):
+        """Random rosters, many times over: no plan may contain an illegal slot."""
+        import random
+        from ff.models import IllegalLineup
+        rng = random.Random(20260910)
+        positions = ["QB", "RB", "WR", "TE", "K", "DEF"]
+        for _ in range(400):
+            players = []
+            for i in range(rng.randint(9, 18)):
+                pos = rng.choice(positions)
+                players.append(mk(f"P{i}", pos,
+                                  rng.choice(list(Slot)),
+                                  rng.choice([None, 0.0, rng.uniform(0, 30)]),
+                                  rng.choice([Availability.ACTIVE,
+                                              Availability.OUT,
+                                              Availability.QUESTIONABLE,
+                                              Availability.BYE]),
+                                  pid=f"p{i}"))
+            roster = Roster(players)
+            try:
+                for plan in (plan_optimal(team(), roster),
+                             plan_inactive_swaps(team(), roster)):
+                    for m in plan.moves:
+                        if m.to_slot.is_starting:
+                            self.assertTrue(
+                                m.player.can_fill(m.to_slot),
+                                f"{m.player.position} -> {m.to_slot.value}")
+            except IllegalLineup as e:
+                self.fail(f"optimizer produced an illegal lineup: {e}")
+
+
+from ff.models import LineupPlan as _LP, Move
+
+
+def LineupPlanStub(moves):
+    return _LP(team=team(), moves=moves, projected_before=0.0,
+               projected_after=0.0)

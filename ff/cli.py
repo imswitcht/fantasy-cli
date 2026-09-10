@@ -69,6 +69,28 @@ def _avail_style(p) -> Text:
                 style=colors.get(p.availability, "dim"))
 
 
+# Platforms return roster entries in their own internal order, which reads as
+# random. Sort into the order people actually think about a lineup in.
+_SLOT_DISPLAY_ORDER = {
+    slot: i for i, slot in enumerate([
+        Slot.QB, Slot.RB, Slot.WR, Slot.TE,
+        Slot.FLEX, Slot.WRRB, Slot.WRTE, Slot.SUPERFLEX,
+        Slot.K, Slot.DEF, Slot.BENCH, Slot.IR,
+    ])
+}
+_POS_DISPLAY_ORDER = {p: i for i, p in enumerate(
+    ["QB", "RB", "WR", "TE", "K", "DEF"])}
+
+
+def _display_key(p):
+    return (
+        _SLOT_DISPLAY_ORDER.get(p.slot, 99),
+        _POS_DISPLAY_ORDER.get(p.position, 99),
+        -(p.projection or 0.0),
+        p.name,
+    )
+
+
 # --------------------------------------------------------------------- group
 
 @click.group()
@@ -205,9 +227,10 @@ def status(week: Optional[int], team_filter: Optional[str], bench: bool):
         table.add_column("Proj", justify="right", width=6)
         table.add_column("Status", width=13)
 
-        rows = list(roster.starters)
+        rows = sorted(roster.starters, key=_display_key)
         if bench:
-            rows += roster.bench + roster.injured_reserve
+            rows += sorted(roster.bench, key=_display_key)
+            rows += sorted(roster.injured_reserve, key=_display_key)
         for p in rows:
             proj = f"{p.projection:.1f}" if p.projection is not None else "-"
             slot_txt = p.slot.value
