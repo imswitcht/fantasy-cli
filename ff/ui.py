@@ -9,7 +9,29 @@ from __future__ import annotations
 
 import re
 import shutil
+import sys
 from typing import Any, Optional
+
+if sys.platform == "win32":
+    # The legacy Windows console (no VT/ANSI support -- plain cmd.exe, or a
+    # shell that doesn't advertise a modern terminal to Python) writes rich's
+    # output straight to sys.stdout, whose encoding rich never controls. If
+    # the process's console codepage is a legacy one (cp1252 etc.) that can't
+    # encode characters rich actually emits (e.g. the "->" arrow in plan
+    # output), print() raises UnicodeEncodeError and kills the whole command.
+    # Force UTF-8 on both the console codepage and Python's stdout/stderr so
+    # this can't happen; `errors="replace"` is a last-resort belt-and-braces
+    # in case some future glyph still isn't representable.
+    try:
+        import ctypes
+        ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+    except Exception:
+        pass
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
 
 try:  # pragma: no cover - exercised by whichever branch the machine has
     from rich.console import Console as _RichConsole
