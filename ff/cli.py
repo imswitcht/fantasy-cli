@@ -8,17 +8,11 @@ import click
 
 from .ui import Panel, Table, Text, console
 from .config import LOG_PATH, Config, ProviderRegistry
-from .crosswalk import Crosswalk, attach_projections
-from .models import Availability, LineupPlan, Roster, Slot, TeamRef
+from .display import WRITE_BADGE, avail_style, display_key, enrich
+from .models import LineupPlan, Roster, TeamRef
 from .optimizer import plan_inactive_swaps, plan_optimal, sub_pairings
 from .providers.base import NotSupported, Provider, ProviderError
 from .writer import VerificationFailed, WriteRefused, commit
-
-WRITE_BADGE = {
-    "official": ("[green]official API[/green]", "✔"),
-    "unofficial": ("[yellow]unofficial[/yellow]", "~"),
-    "none": ("[red]read-only[/red]", "✘"),
-}
 
 
 def _fail(msg: str, code: int = 1):
@@ -32,63 +26,6 @@ def _load() -> tuple[Config, ProviderRegistry]:
     except Exception as e:
         _fail(str(e))
     return cfg, ProviderRegistry(cfg)
-
-
-def _enrich(reg: ProviderRegistry, provider_name: str,
-            roster: Roster, week: int, quiet: bool = True) -> None:
-    """Attach shared Sleeper projections so all four teams are comparable."""
-    sl = reg.sleeper_for_data
-    if sl is None:
-        return
-    try:
-        cw = Crosswalk.from_sleeper_catalog(sl.players())
-        proj = sl.projections(week)
-    except Exception as e:
-        if not quiet:
-            console.print(f"[yellow]Projections unavailable ({e}). "
-                          "Falling back to platform projections.[/yellow]")
-        return
-    matched, misses = attach_projections(roster.players, provider_name, cw, proj)
-    if misses and not quiet:
-        console.print(f"[dim]No projection matched for: {', '.join(misses[:6])}"
-                      f"{' ...' if len(misses) > 6 else ''}[/dim]")
-
-
-def _avail_style(p) -> Text:
-    if p.availability is Availability.ACTIVE:
-        return Text("")
-    colors = {
-        Availability.OUT: "red",
-        Availability.INJURED_RESERVE: "red",
-        Availability.SUSPENDED: "red",
-        Availability.BYE: "red",
-        Availability.DOUBTFUL: "red",
-        Availability.QUESTIONABLE: "yellow",
-    }
-    return Text(p.availability.value,
-                style=colors.get(p.availability, "dim"))
-
-
-# Platforms return roster entries in their own internal order, which reads as
-# random. Sort into the order people actually think about a lineup in.
-_SLOT_DISPLAY_ORDER = {
-    slot: i for i, slot in enumerate([
-        Slot.QB, Slot.RB, Slot.WR, Slot.TE,
-        Slot.FLEX, Slot.WRRB, Slot.WRTE, Slot.SUPERFLEX,
-        Slot.K, Slot.DEF, Slot.BENCH, Slot.IR,
-    ])
-}
-_POS_DISPLAY_ORDER = {p: i for i, p in enumerate(
-    ["QB", "RB", "WR", "TE", "K", "DEF"])}
-
-
-def _display_key(p):
-    return (
-        _SLOT_DISPLAY_ORDER.get(p.slot, 99),
-        _POS_DISPLAY_ORDER.get(p.position, 99),
-        -(p.projection or 0.0),
-        p.name,
-    )
 
 
 # --------------------------------------------------------------------- group
@@ -210,7 +147,7 @@ def status(week: Optional[int], team_filter: Optional[str], bench: bool):
         try:
             wk = week or prov.current_week()
             roster = prov.get_roster(t, wk)
-            _enrich(reg, t.provider, roster, wk)
+            enrich(reg, t.provider, roster, wk)
         except Exception as e:
             console.print(f"[red]{t.nickname}: {e}[/red]\n")
             continue
@@ -227,10 +164,10 @@ def status(week: Optional[int], team_filter: Optional[str], bench: bool):
         table.add_column("Proj", justify="right", width=6)
         table.add_column("Status", width=13)
 
-        rows = sorted(roster.starters, key=_display_key)
+        rows = sorted(roster.starters, key=display_key)
         if bench:
-            rows += sorted(roster.bench, key=_display_key)
-            rows += sorted(roster.injured_reserve, key=_display_key)
+            rows += sorted(roster.bench, key=display_key)
+            rows += sorted(roster.injured_reserve, key=display_key)
         for p in rows:
             proj = f"{p.projection:.1f}" if p.projection is not None else "-"
             slot_txt = p.slot.value
@@ -239,7 +176,7 @@ def status(week: Optional[int], team_filter: Optional[str], bench: bool):
             table.add_row(
                 Text(slot_txt, style=style),
                 Text(p.name + lock, style=style),
-                p.position, p.nfl_team or "-", proj, _avail_style(p),
+                p.position, p.nfl_team or "-", proj, avail_style(p),
             )
         console.print(table)
         console.print(f"  Projected starters total: "
@@ -287,7 +224,7 @@ def _run_planner(planner, week, team_filter, apply_it, mode_label):
         try:
             wk = week or prov.current_week()
             roster = prov.get_roster(t, wk)
-            _enrich(reg, t.provider, roster, wk)
+            enrich(reg, t.provider, roster, wk)
             plan = planner(t, roster)
         except Exception as e:
             console.print(f"[red]{t.nickname}: {e}[/red]\n")
@@ -310,7 +247,7 @@ def _run_planner(planner, week, team_filter, apply_it, mode_label):
 
         try:
             def _replan(team, fresh):
-                _enrich(reg, team.provider, fresh, wk)
+                enrich(reg, team.provider, fresh, wk)
                 return planner(team, fresh)
 
             done = commit(prov, t, _replan, wk,
@@ -375,7 +312,7 @@ def sub_plan(week):
     for t in sleeper_teams:
         wk = week or prov.current_week()
         roster = prov.get_roster(t, wk)
-        _enrich(reg, "sleeper", roster, wk)
+        enrich(reg, "sleeper", roster, wk)
         console.print(f"[bold]{t.nickname}[/bold] [dim]· set these in "
                       f"Sleeper → team → AutoSubs[/dim]")
         pairs = sub_pairings(roster, t.slot_layout)
@@ -467,6 +404,19 @@ def capture(platform: str):
 The driver will use the captured shape as its template, substituting your own
 team id, week and player moves. If the platform also changed its auth headers,
 copy those in as a "headers" key alongside the payload.""", expand=False))
+
+
+# ------------------------------------------------------------------------ tui
+
+@cli.command()
+def tui():
+    """Launch the interactive Sleeper-style roster browser."""
+    try:
+        from .tui import FantasyTUI
+    except ImportError:
+        _fail("textual is not installed. Run: pip install textual")
+        return
+    FantasyTUI().run()
 
 
 def main():

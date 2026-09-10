@@ -1,0 +1,94 @@
+/* Sleeper-inspired dark palette: near-black ground, slate card rows,
+   colored position badges. Approximate, not pixel-matched. */
+
+Screen {
+    background: #0e1015;
+    color: #d7dce2;
+}
+
+Header {
+    background: #14171d;
+    color: #f2f4f7;
+}
+
+Footer {
+    background: #14171d;
+}
+
+TabbedContent Tab {
+    color: #8b93a1;
+}
+
+TabbedContent Tab.-active {
+    color: #f2f4f7;
+    text-style: bold;
+    border-bottom: heavy #7c5cff;
+}
+
+.summary {
+    padding: 1 2 0 2;
+}
+
+#starters {
+    padding: 0 1;
+}
+
+Collapsible {
+    background: #0e1015;
+    border: none;
+    margin: 1 1 0 1;
+}
+
+Collapsible > .collapsible--title {
+    color: #8b93a1;
+    text-style: bold;
+}
+
+#bench-rows {
+    padding: 0 1;
+}
+
+.player-row {
+    height: 3;
+    background: #181b21;
+    border: round #21252d;
+    margin-bottom: 1;
+    padding: 0 1;
+    align: left middle;
+}
+
+.badge {
+    width: 5;
+    content-align: center middle;
+    text-style: bold;
+    color: #0e1015;
+    margin-right: 1;
+}
+
+.pos-qb  { background: #7c5cff; }
+.pos-rb  { background: #2fbf71; }
+.pos-wr  { background: #3ea6ff; }
+.pos-te  { background: #ff8a3d; }
+.pos-k   { background: #9aa4b2; }
+.pos-def { background: #5b6b8c; }
+
+.player-name {
+    width: 1fr;
+    color: #f2f4f7;
+}
+
+.player-meta {
+    width: 14;
+    color: #8b93a1;
+}
+
+.player-proj {
+    width: 6;
+    content-align: right middle;
+    color: #d7dce2;
+}
+
+.player-status {
+    width: 12;
+    content-align: right middle;
+}

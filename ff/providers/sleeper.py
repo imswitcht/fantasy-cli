@@ -18,6 +18,7 @@ platform's own feature covers this team.
 from __future__ import annotations
 
 import json
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -71,6 +72,10 @@ class SleeperProvider(Provider):
         self.session.headers.update({"Accept": "application/json"})
         self._players: Optional[dict] = None
         self._user_id: Optional[str] = None
+        # One SleeperProvider is shared across every team that needs its
+        # projections/crosswalk (ff/tui.py loads all tabs from concurrent
+        # background threads), so the lazy caches below need a lock.
+        self._lock = threading.Lock()
 
     @property
     def capabilities(self) -> Capabilities:
@@ -96,12 +101,15 @@ class SleeperProvider(Provider):
         return r.json()
 
     def user_id(self) -> str:
-        if self._user_id is None:
-            data = self._get(f"{API}/user/{self.username}")
-            if not data:
-                raise ProviderError(f"Sleeper user '{self.username}' not found.")
-            self._user_id = data["user_id"]
-        return self._user_id
+        if self._user_id is not None:
+            return self._user_id
+        with self._lock:
+            if self._user_id is None:
+                data = self._get(f"{API}/user/{self.username}")
+                if not data:
+                    raise ProviderError(f"Sleeper user '{self.username}' not found.")
+                self._user_id = data["user_id"]
+            return self._user_id
 
     def check_auth(self) -> str:
         uid = self.user_id()
@@ -115,40 +123,44 @@ class SleeperProvider(Provider):
         """The full NFL player dictionary. ~5MB, so cached on disk for a day."""
         if self._players is not None:
             return self._players
-        cache = self.cache_dir / "sleeper_players.json"
-        if cache.exists() and time.time() - cache.stat().st_mtime < 86400:
-            self._players = json.loads(cache.read_text())
-            return self._players
-        data = self._get(f"{API}/players/nfl")
-        cache.write_text(json.dumps(data))
-        self._players = data
-        return data
+        with self._lock:
+            if self._players is not None:
+                return self._players
+            cache = self.cache_dir / "sleeper_players.json"
+            if cache.exists() and time.time() - cache.stat().st_mtime < 86400:
+                self._players = json.loads(cache.read_text())
+                return self._players
+            data = self._get(f"{API}/players/nfl")
+            cache.write_text(json.dumps(data))
+            self._players = data
+            return data
 
     def projections(self, week: int) -> dict[str, float]:
         """player_id -> projected PPR points. Used for all three platforms."""
         cache = self.cache_dir / f"sleeper_proj_{self.season}_{week}.json"
-        if cache.exists() and time.time() - cache.stat().st_mtime < 3600:
-            return json.loads(cache.read_text())
-        out: dict[str, float] = {}
-        try:
-            rows = self._get(
-                f"{API2}/projections/nfl/{self.season}/{week}",
-                params={"season_type": "regular", "order_by": "ppr"},
-            )
-            for row in rows or []:
-                pid = str(row.get("player_id"))
-                stats = row.get("stats") or {}
-                pts = stats.get("pts_ppr") or stats.get("pts_half_ppr") or stats.get("pts_std")
-                if pid and pts is not None:
-                    out[pid] = float(pts)
-            cache.write_text(json.dumps(out))
-        except requests.HTTPError as e:
-            raise ProviderError(
-                f"Sleeper projections endpoint returned {e.response.status_code}. "
-                "This is an undocumented endpoint and may have moved; "
-                "run with --no-projections to fall back to platform projections."
-            ) from e
-        return out
+        with self._lock:
+            if cache.exists() and time.time() - cache.stat().st_mtime < 3600:
+                return json.loads(cache.read_text())
+            out: dict[str, float] = {}
+            try:
+                rows = self._get(
+                    f"{API2}/projections/nfl/{self.season}/{week}",
+                    params={"season_type": "regular", "order_by": "ppr"},
+                )
+                for row in rows or []:
+                    pid = str(row.get("player_id"))
+                    stats = row.get("stats") or {}
+                    pts = stats.get("pts_ppr") or stats.get("pts_half_ppr") or stats.get("pts_std")
+                    if pid and pts is not None:
+                        out[pid] = float(pts)
+                cache.write_text(json.dumps(out))
+            except requests.HTTPError as e:
+                raise ProviderError(
+                    f"Sleeper projections endpoint returned {e.response.status_code}. "
+                    "This is an undocumented endpoint and may have moved; "
+                    "run with --no-projections to fall back to platform projections."
+                ) from e
+            return out
 
     def discover_teams(self) -> list[TeamRef]:
         uid = self.user_id()

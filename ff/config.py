@@ -6,6 +6,7 @@ is safe to keep around -- league and team ids are not sensitive.
 from __future__ import annotations
 
 import os
+import threading
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -79,21 +80,31 @@ class ProviderRegistry:
         self.cfg = cfg
         self._cache: dict[str, Provider] = {}
         self._errors: dict[str, str] = {}
+        self._lock = threading.Lock()
         CACHE_DIR.mkdir(exist_ok=True)
         SECRETS_DIR.mkdir(exist_ok=True)
 
     def get(self, name: str) -> Provider:
+        # The TUI loads every team's tab from its own background thread, so
+        # two teams on the same platform (e.g. both Yahoo teams, or any team
+        # plus the shared Sleeper projection source) can call this at once.
+        # Without the lock, both threads see a cache miss and each builds
+        # its own Provider -- duplicate sessions/logins racing to win the
+        # cache slot.
         name = name.lower()
         if name in self._cache:
             return self._cache[name]
-        if name in self._errors:
-            raise ProviderError(self._errors[name])
-        try:
-            self._cache[name] = self._build(name)
-        except Exception as e:
-            self._errors[name] = str(e)
-            raise
-        return self._cache[name]
+        with self._lock:
+            if name in self._cache:
+                return self._cache[name]
+            if name in self._errors:
+                raise ProviderError(self._errors[name])
+            try:
+                self._cache[name] = self._build(name)
+            except Exception as e:
+                self._errors[name] = str(e)
+                raise
+            return self._cache[name]
 
     def try_get(self, name: str) -> tuple[Optional[Provider], Optional[str]]:
         try:
