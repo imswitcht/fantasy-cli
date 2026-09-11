@@ -21,8 +21,8 @@ TabbedContent Tab {
 
 TabbedContent Tab.-active {
     color: #f2f4f7;
+    background: #21252d;
     text-style: bold;
-    border-bottom: heavy #7c5cff;
 }
 
 .summary {
@@ -93,8 +93,23 @@ TabbedContent Tab.-active {
     color: #f2f4f7;
 }
 
-.player-meta {
-    width: 14;
+.clickable-name:hover {
+    text-style: underline;
+    color: #a996ff;
+}
+
+.player-team {
+    width: 5;
+    color: #8b93a1;
+}
+
+.player-opp {
+    width: 6;
+    color: #8b93a1;
+}
+
+.player-game {
+    width: 12;
     color: #8b93a1;
 }
 
@@ -104,9 +119,45 @@ TabbedContent Tab.-active {
     color: #d7dce2;
 }
 
-.player-status {
+.player-actual {
+    width: 6;
+    content-align: right middle;
+    color: #d7dce2;
+}
+
+.player-avail {
     width: 12;
     content-align: right middle;
+}
+
+.move-btn {
+    width: 4;
+    min-width: 4;
+    height: 1;
+    margin-left: 1;
+    padding: 0;
+    border: none;
+    background: #2a2f3a;
+    color: #f2f4f7;
+}
+
+.move-btn:hover {
+    background: #7c5cff;
+}
+
+.move-btn-spacer {
+    width: 5;
+}
+
+.column-header {
+    height: 1;
+    padding: 0 1;
+    margin-bottom: 1;
+}
+
+.header-cell {
+    color: #5b6270;
+    text-style: bold;
 }
 
 SwapConfirmScreen {
@@ -133,4 +184,32 @@ SwapConfirmScreen {
 
 #swap-buttons Button {
     margin-left: 1;
+}
+
+PlayerInfoScreen {
+    align: center middle;
+}
+
+#info-dialog {
+    width: 70;
+    height: auto;
+    max-height: 20;
+    background: #14171d;
+    border: round #7c5cff;
+    padding: 1 2;
+}
+
+#info-dialog .info-line {
+    padding: 0 0 1 0;
+}
+
+#info-extra {
+    padding: 0 0 1 0;
+    color: #8b93a1;
+}
+
+#info-buttons {
+    height: auto;
+    align: right middle;
+    padding-top: 1;
 }

@@ -111,8 +111,10 @@ class Player:
     availability: Availability = Availability.UNKNOWN
     injury_note: Optional[str] = None
     opponent: Optional[str] = None
+    game_status: str = ""                # "" | "Sun 1:00 PM" | "2:51 - 3rd" | "Final"
     kickoff: Optional[datetime] = None   # tz-aware UTC
     projection: Optional[float] = None
+    actual_points: Optional[float] = None  # points actually scored so far; None pregame
 
     # Where the player currently sits
     slot: Slot = Slot.BENCH

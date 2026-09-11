@@ -3,17 +3,27 @@
 A second, richer way to look at the same data `ff status` already prints.
 Mostly read-only, but on platforms where `provider.capabilities.can_write_lineup`
 is true (ESPN today; Sleeper's is False by design, Yahoo's provider can't
-authenticate yet -- see CLAUDE.md's platform table) you can click a starter
-and a bench player to swap them. That goes through the exact same
-read -> recompute -> submit -> verify path as `ff optimize --apply`
-(`ff/writer.py:commit`), gated behind a confirm dialog before anything is
-sent -- nothing here bypasses the project's normal write safety rules. A
-manual swap is always exempt from `min_gain_to_write` (the user already
-approved that exact move by clicking Confirm); the writable teams also get an
-"Auto-optimization" switch (default ON) that gates whether `ff optimize
---apply` / `ff autopilot --apply` may write to *that team* at all -- OFF
-skips those commands for the team entirely, leaving it solely to manual
-click-to-swap, which is unaffected either way.
+authenticate yet -- see CLAUDE.md's platform table) each writable row has a
+small Move button that starts a swap: pick a starter and a bench player and
+it goes through the exact same read -> recompute -> submit -> verify path as
+`ff optimize --apply` (`ff/writer.py:commit`), gated behind a confirm dialog
+before anything is sent -- nothing here bypasses the project's normal write
+safety rules. A manual swap is always exempt from `min_gain_to_write` (the
+user already approved that exact move by clicking Confirm); the writable
+teams also get an "Auto-optimization" switch (default ON) that gates whether
+`ff optimize --apply` / `ff autopilot --apply` may write to *that team* at
+all -- OFF skips those commands for the team entirely, leaving it solely to
+manual click-to-swap, which is unaffected either way.
+
+Clicking a player's *name* (any platform, not just writable ones) opens a
+read-only info panel. ESPN players get a bit more there -- ESPN's public
+per-athlete endpoint has real player-specific "videos" (short clips with
+real headlines, e.g. fantasy-relevant commentary) and a verified player-card
+link (`EspnProvider.player_info`); ESPN's per-player *news* filter turned out
+not to work at all when tested (the `athlete=` param is silently ignored),
+so that's not used. Sleeper and Yahoo have no player-news/clips capability in
+their public APIs, so their panel only shows the bio fields already on the
+`Player` object -- no fabricated news section, no guessed deep link.
 
 Requires `textual`, which is an optional dependency (see requirements.txt) --
 `ff tui` in cli.py guards the import so the rest of the tool never needs it.
@@ -80,12 +90,32 @@ def _swap_planner(pid_a: str, pid_b: str):
     return planner
 
 
+class PlayerNameLabel(Static):
+    """The player's name, clickable on every platform to open the info panel."""
+
+    def __init__(self, player: Player) -> None:
+        self._player = player
+        lock = " \U0001F512" if player.is_locked else ""
+        super().__init__(f"{player.name}{lock}", classes="player-name clickable-name")
+
+    def on_click(self, event: events.Click) -> None:
+        event.stop()
+        self.post_message(PlayerRow.NameClicked(self._player))
+
+
 class PlayerRow(Horizontal):
-    """One player: position badge, name/team, opponent, projection, status."""
+    """One player: badge, clickable name, team/opponent/game, proj/actual, status, move."""
 
     class Clicked(Message):
+        """Move button pressed -- starts/continues a swap selection."""
         def __init__(self, row: "PlayerRow") -> None:
             self.row = row
+            super().__init__()
+
+    class NameClicked(Message):
+        """Player name clicked -- opens the read-only info panel."""
+        def __init__(self, player: Player) -> None:
+            self.player = player
             super().__init__()
 
     def __init__(self, player: Player, writable: bool = False) -> None:
@@ -97,18 +127,42 @@ class PlayerRow(Horizontal):
     def compose(self) -> ComposeResult:
         p = self.player
         badge_cls = POSITION_CSS_CLASS.get(p.position, "pos-def")
-        lock = " \U0001F512" if p.is_locked else ""
         proj = f"{p.projection:.1f}" if p.projection is not None else "-"
-        opp = f"@{p.opponent}" if p.opponent else ""
+        actual = f"{p.actual_points:.1f}" if p.actual_points is not None else "-"
+        opp = f"@{p.opponent}" if p.opponent else "-"
+        status = p.game_status or "-"
         yield Label(p.position, classes=f"badge {badge_cls}")
-        yield Label(f"{p.name}{lock}", classes="player-name")
-        yield Label(f"{p.nfl_team or '-'} {opp}".strip(), classes="player-meta")
+        yield PlayerNameLabel(p)
+        yield Label(p.nfl_team or "-", classes="player-team")
+        yield Label(opp, classes="player-opp")
+        yield Label(status, classes="player-game")
         yield Label(proj, classes="player-proj")
-        yield Static(avail_style(p), classes="player-status")
-
-    def on_click(self, event: events.Click) -> None:
+        yield Label(actual, classes="player-actual")
+        yield Static(avail_style(p), classes="player-avail")
         if self.writable:
+            yield Button("⇄", id="move", classes="move-btn")
+        else:
+            yield Static("", classes="move-btn-spacer")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "move":
+            event.stop()
             self.post_message(self.Clicked(self))
+
+
+class ColumnHeader(Horizontal):
+    """Column labels for a RosterView's player rows -- widths must match PlayerRow's."""
+
+    def compose(self) -> ComposeResult:
+        yield Label("", classes="badge header-cell")
+        yield Label("Player", classes="player-name header-cell")
+        yield Label("Team", classes="player-team header-cell")
+        yield Label("Opp", classes="player-opp header-cell")
+        yield Label("Game", classes="player-game header-cell")
+        yield Label("Proj", classes="player-proj header-cell")
+        yield Label("Pts", classes="player-actual header-cell")
+        yield Label("Status", classes="player-avail header-cell")
+        yield Label("", classes="move-btn-spacer header-cell")
 
 
 class SwapConfirmScreen(ModalScreen[bool]):
@@ -147,6 +201,75 @@ class SwapConfirmScreen(ModalScreen[bool]):
         self.dismiss(False)
 
 
+class PlayerInfoScreen(ModalScreen):
+    """Read-only player info: bio always, ESPN clips + player-card link when available."""
+
+    BINDINGS = [("escape", "close", "Close")]
+
+    def __init__(self, player: Player, provider_name: str, reg: ProviderRegistry) -> None:
+        self._player = player
+        self._provider_name = provider_name
+        self._reg = reg
+        super().__init__()
+
+    def compose(self) -> ComposeResult:
+        p = self._player
+        matchup = f"{'@' if p.opponent else ''}{p.opponent or 'no game data'}"
+        if p.game_status:
+            matchup += f"  ({p.game_status})"
+        with Vertical(id="info-dialog"):
+            yield Label(f"[bold]{p.name}[/bold]  {p.position} · {p.nfl_team or '-'}",
+                       classes="info-line")
+            yield Label(f"Status: {p.injury_note or p.availability.value}",
+                       classes="info-line")
+            yield Label(f"Matchup: {matchup}", classes="info-line")
+            proj = f"{p.projection:.1f}" if p.projection is not None else "-"
+            actual = f"{p.actual_points:.1f}" if p.actual_points is not None else "-"
+            yield Label(f"Projected: {proj}  ·  Scored: {actual}", classes="info-line")
+            yield Static(id="info-extra")
+            with Horizontal(id="info-buttons"):
+                yield Button("Close", id="close", variant="primary")
+
+    def on_mount(self) -> None:
+        extra = self.query_one("#info-extra", Static)
+        if self._provider_name == "espn":
+            extra.update("[dim]Loading ESPN clips...[/dim]")
+            self.load_espn_extra()
+        else:
+            extra.update("[dim]No news/clips feed available from this platform.[/dim]")
+
+    @work(thread=True)
+    def load_espn_extra(self) -> None:
+        prov, err = self._reg.try_get("espn")
+        if prov is None or not hasattr(prov, "player_info"):
+            self.app.call_from_thread(
+                self._show_extra, f"[red]{err or 'ESPN unavailable'}[/red]")
+            return
+        try:
+            info = prov.player_info(self._player.platform_id)
+        except Exception as e:
+            self.app.call_from_thread(
+                self._show_extra, f"[red]Couldn't load ESPN info: {e}[/red]")
+            return
+        lines = [f"• {headline}" for headline, _ in info["videos"] if headline]
+        text = "\n".join(lines) or "[dim]No recent ESPN clips.[/dim]"
+        if info.get("player_url"):
+            text += f"\n\n[dim]{info['player_url']}[/dim]"
+        self.app.call_from_thread(self._show_extra, text)
+
+    def _show_extra(self, text: str) -> None:
+        try:
+            self.query_one("#info-extra", Static).update(text)
+        except Exception:
+            pass  # dialog may already be closed
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss()
+
+    def action_close(self) -> None:
+        self.dismiss()
+
+
 class RosterView(VerticalScroll):
     """Everything for one team: summary line, starters, bench -- one page."""
 
@@ -162,6 +285,7 @@ class RosterView(VerticalScroll):
     def compose(self) -> ComposeResult:
         yield Label(f"[dim]Loading {self._team.nickname}...[/dim]",
                     classes="summary", id="summary")
+        yield ColumnHeader(classes="column-header")
         yield Vertical(id="starters")
         yield Label("BENCH", classes="section-label", id="bench-label")
         yield Vertical(id="bench-rows")
@@ -232,6 +356,12 @@ class RosterView(VerticalScroll):
         else:
             self.app.notify(f"Auto-optimization OFF for {self._team.nickname} "
                             "-- left solely to your manual click-to-swap.")
+
+    # ------------------------------------------------------------ info panel
+
+    def on_player_row_name_clicked(self, message: PlayerRow.NameClicked) -> None:
+        self.app.push_screen(
+            PlayerInfoScreen(message.player, self._team.provider, self._reg))
 
     # ------------------------------------------------------------ swapping
 

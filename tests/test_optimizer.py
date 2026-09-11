@@ -328,7 +328,7 @@ class TestEspnEligibilityParsing(unittest.TestCase):
                 "proTeamId": 12, "stats": [], "injuryStatus": "ACTIVE",
             }},
         }
-        return _parse_player(entry, week=1, kickoffs={})
+        return _parse_player(entry, week=1, schedule={})
 
     def test_wide_receiver_is_not_kicker_eligible(self):
         # A real ESPN WR: RB/WR(3), WR(4), WR/TE(5), BE(20), IR(21), FLEX(23)
@@ -389,6 +389,56 @@ class TestEspnEligibilityParsing(unittest.TestCase):
                 expected = slot.value in p.eligible_positions
                 self.assertEqual(p.can_fill(slot), expected,
                                  f"{p.position} vs {slot.value}")
+
+
+class TestEspnActualPointsAndScheduleParsing(unittest.TestCase):
+    """Regression: opponent/game_status/actual_points must actually get set.
+
+    Player.opponent existed on the model for a long time with no provider
+    ever populating it -- this pins down that ESPN's parser now does, from a
+    realistic raw payload rather than hand-built Player objects.
+    """
+
+    def _parse(self, stats):
+        from ff.providers.espn import _parse_player
+        from ff.schedule import GameInfo
+        from datetime import datetime, timezone
+
+        entry = {
+            "lineupSlotId": 20,
+            "playerPoolEntry": {"player": {
+                "id": 1, "fullName": "Test Player",
+                "defaultPositionId": 1, "eligibleSlots": [0, 20, 21],
+                "proTeamId": 12,  # KC
+                "stats": stats, "injuryStatus": "ACTIVE",
+            }},
+        }
+        schedule = {"KC": GameInfo(
+            kickoff=datetime(2026, 9, 14, tzinfo=timezone.utc),
+            opponent="LV", status="Final", state="post")}
+        return _parse_player(entry, week=1, schedule=schedule)
+
+    def test_opponent_and_game_status_come_from_schedule(self):
+        p = self._parse(stats=[])
+        self.assertEqual(p.opponent, "LV")
+        self.assertEqual(p.game_status, "Final")
+
+    def test_actual_points_read_from_statsourceid_zero(self):
+        p = self._parse(stats=[
+            {"scoringPeriodId": 1, "statSourceId": 1, "statSplitTypeId": 1,
+             "appliedTotal": 18.4},   # projected
+            {"scoringPeriodId": 1, "statSourceId": 0, "statSplitTypeId": 1,
+             "appliedTotal": 22.7},   # actual
+        ])
+        self.assertEqual(p.projection, 18.4)
+        self.assertEqual(p.actual_points, 22.7)
+
+    def test_actual_points_none_when_no_actual_stat_row(self):
+        p = self._parse(stats=[
+            {"scoringPeriodId": 1, "statSourceId": 1, "statSplitTypeId": 1,
+             "appliedTotal": 18.4},
+        ])
+        self.assertIsNone(p.actual_points)
 
 
 class TestPositionSlotTruthTable(unittest.TestCase):

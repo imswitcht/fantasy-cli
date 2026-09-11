@@ -25,6 +25,7 @@ from typing import Any, Optional
 import requests
 
 from ..models import Availability, LineupPlan, Player, Roster, Slot, TeamRef
+from ..schedule import GameInfo, fetch_nfl_schedule
 from .base import AuthError, Capabilities, Provider, ProviderError
 
 READ_HOST = "https://lm-api-reads.fantasy.espn.com"
@@ -180,34 +181,39 @@ class EspnProvider(Provider):
         if not team.league_name:
             team.league_name = data.get("settings", {}).get("name")
 
-        kickoffs = self._kickoff_map(week)
+        schedule = fetch_nfl_schedule(self.session, self.season, week)
         players: list[Player] = []
         for e in entry.get("roster", {}).get("entries", []):
-            p = _parse_player(e, week, kickoffs)
+            p = _parse_player(e, week, schedule)
             if p:
                 players.append(p)
         return Roster(players=players)
 
-    def _kickoff_map(self, week: int) -> dict[str, datetime]:
-        """proTeam abbreviation -> kickoff datetime for this week."""
-        try:
-            r = self.session.get(
-                "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
-                params={"week": week, "seasontype": 2, "dates": self.season},
-                timeout=20)
-            r.raise_for_status()
-            out: dict[str, datetime] = {}
-            for game in r.json().get("events", []):
-                start = datetime.fromisoformat(game["date"].replace("Z", "+00:00"))
-                for comp in game.get("competitions", [{}])[0].get("competitors", []):
-                    abbr = comp.get("team", {}).get("abbreviation")
-                    if abbr:
-                        out[abbr] = start
-            return out
-        except Exception:
-            # Locks are a safety feature, not a hard requirement. Without this
-            # map we simply treat nothing as locked and let ESPN reject the write.
-            return {}
+    def player_info(self, platform_id: str) -> dict:
+        """Best-effort ESPN clips + player-card link for the TUI info panel.
+
+        Uses ESPN's public per-athlete overview endpoint. Its numeric id is
+        the same as our own platform_id for ESPN players (verified against
+        real data: Joe Burrow is 3915511 in both the fantasy roster payload
+        and this endpoint). There is no working per-player *news* filter on
+        ESPN's public API -- the news endpoint's `athlete=` query param is
+        silently ignored and just returns generic top NFL news regardless of
+        id, so this uses the athlete page's own "videos" list instead, which
+        genuinely is player-specific.
+        """
+        r = self.session.get(
+            "https://site.web.api.espn.com/apis/common/v3/sports/football/nfl/athletes/"
+            f"{platform_id}",
+            timeout=15,
+        )
+        r.raise_for_status()
+        data = r.json()
+        videos = [(v.get("headline") or "", v.get("description") or "")
+                  for v in (data.get("videos") or [])[:3]]
+        links = (data.get("athlete") or {}).get("links") or []
+        player_url = next((l.get("href") for l in links
+                           if "playercard" in (l.get("rel") or [])), None)
+        return {"videos": videos, "player_url": player_url}
 
     # --------------------------------------------------------------- writes
 
@@ -276,7 +282,7 @@ class EspnProvider(Provider):
 # ------------------------------------------------------------------ helpers
 
 def _parse_player(entry: dict, week: int,
-                  kickoffs: dict[str, datetime]) -> Optional[Player]:
+                  schedule: dict[str, GameInfo]) -> Optional[Player]:
     pool = entry.get("playerPoolEntry", {})
     p = pool.get("player") or entry.get("player")
     if not p:
@@ -300,20 +306,25 @@ def _parse_player(entry: dict, week: int,
             eligible.add(candidate.value)
 
     proj = None
+    actual = None
     for stat in p.get("stats", []):
-        if (stat.get("scoringPeriodId") == week
-                and stat.get("statSourceId") == 1        # 1 = projected
+        if not (stat.get("scoringPeriodId") == week
                 and stat.get("statSplitTypeId") == 1):   # 1 = single week
+            continue
+        source = stat.get("statSourceId")
+        if source == 1:                                  # 1 = projected
             proj = stat.get("appliedTotal")
-            break
+        elif source == 0:                                 # 0 = actual
+            actual = stat.get("appliedTotal")
 
     abbr = PRO_TEAM_ABBR.get(p.get("proTeamId"), None)
     status_raw = (p.get("injuryStatus") or "ACTIVE").upper()
     availability = INJURY_MAP.get(status_raw, Availability.UNKNOWN)
 
-    kickoff = kickoffs.get(abbr) if abbr else None
+    game = schedule.get(abbr) if abbr else None
+    kickoff = game.kickoff if game else None
     # No game this week for this team means bye.
-    if abbr and abbr != "FA" and kickoffs and abbr not in kickoffs:
+    if abbr and abbr != "FA" and schedule and abbr not in schedule:
         availability = Availability.BYE
 
     return Player(
@@ -324,8 +335,11 @@ def _parse_player(entry: dict, week: int,
         eligible_positions=eligible or {pos},
         availability=availability,
         injury_note=status_raw if availability is not Availability.ACTIVE else None,
+        opponent=game.opponent if game else None,
+        game_status=game.status if game else "",
         kickoff=kickoff,
         projection=proj,
+        actual_points=actual,
         slot=slot,
     )
 

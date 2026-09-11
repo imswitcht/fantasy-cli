@@ -20,13 +20,13 @@ from __future__ import annotations
 import json
 import threading
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 import requests
 
 from ..models import Availability, LineupPlan, Player, Roster, Slot, TeamRef
+from ..schedule import GameInfo, fetch_nfl_schedule
 from .base import Capabilities, NotSupported, Provider, ProviderError
 
 API = "https://api.sleeper.app/v1"
@@ -162,6 +162,31 @@ class SleeperProvider(Provider):
                 ) from e
             return out
 
+    def stats(self, week: int) -> dict[str, float]:
+        """player_id -> points actually scored so far this week (not projected)."""
+        cache = self.cache_dir / f"sleeper_stats_{self.season}_{week}.json"
+        with self._lock:
+            if cache.exists() and time.time() - cache.stat().st_mtime < 300:
+                return json.loads(cache.read_text())
+            out: dict[str, float] = {}
+            try:
+                rows = self._get(
+                    f"{API2}/stats/nfl/{self.season}/{week}",
+                    params={"season_type": "regular"},
+                )
+                for row in rows or []:
+                    pid = str(row.get("player_id"))
+                    stats = row.get("stats") or {}
+                    pts = stats.get("pts_ppr") or stats.get("pts_half_ppr") or stats.get("pts_std")
+                    if pid and pts is not None:
+                        out[pid] = float(pts)
+                cache.write_text(json.dumps(out))
+            except requests.HTTPError:
+                # Actual points are a display nicety, not load-bearing like
+                # projections -- fail soft to "no data yet" instead of raising.
+                return {}
+            return out
+
     def discover_teams(self) -> list[TeamRef]:
         uid = self.user_id()
         leagues = self._get(f"{API}/user/{uid}/leagues/nfl/{self.season}")
@@ -202,7 +227,8 @@ class SleeperProvider(Provider):
 
         catalog = self.players()
         proj = self.projections(week)
-        kickoffs = _kickoffs(self.session, self.season, week)
+        actual = self.stats(week)
+        schedule = fetch_nfl_schedule(self.session, self.season, week)
 
         starters: list[str] = mine.get("starters") or []
         all_ids: list[str] = mine.get("players") or []
@@ -213,7 +239,7 @@ class SleeperProvider(Provider):
             if not pid or pid == "0":
                 continue
             slot = starting_slots[idx] if idx < len(starting_slots) else Slot.FLEX
-            p = _build(pid, catalog, proj, kickoffs, slot)
+            p = _build(pid, catalog, proj, actual, schedule, slot)
             if p:
                 players.append(p)
 
@@ -221,7 +247,7 @@ class SleeperProvider(Provider):
             if pid in starters:
                 continue
             slot = Slot.IR if pid in reserve else Slot.BENCH
-            p = _build(pid, catalog, proj, kickoffs, slot)
+            p = _build(pid, catalog, proj, actual, schedule, slot)
             if p:
                 players.append(p)
 
@@ -251,8 +277,8 @@ class SleeperProvider(Provider):
 
 # ------------------------------------------------------------------ helpers
 
-def _build(pid: str, catalog: dict, proj: dict[str, float],
-           kickoffs: dict[str, datetime], slot: Slot) -> Optional[Player]:
+def _build(pid: str, catalog: dict, proj: dict[str, float], actual: dict[str, float],
+           schedule: dict[str, GameInfo], slot: Slot) -> Optional[Player]:
     meta = catalog.get(str(pid))
     if not meta:
         return None
@@ -265,8 +291,9 @@ def _build(pid: str, catalog: dict, proj: dict[str, float],
     status = meta.get("injury_status")
     availability = INJURY_MAP.get(status, Availability.ACTIVE if status is None
                                   else Availability.QUESTIONABLE)
-    kickoff = kickoffs.get(team_abbr) if team_abbr else None
-    if team_abbr and kickoffs and team_abbr not in kickoffs:
+    game = schedule.get(team_abbr) if team_abbr else None
+    kickoff = game.kickoff if game else None
+    if team_abbr and schedule and team_abbr not in schedule:
         availability = Availability.BYE
 
     name = meta.get("full_name") or f"{meta.get('first_name','')} {meta.get('last_name','')}".strip()
@@ -278,25 +305,10 @@ def _build(pid: str, catalog: dict, proj: dict[str, float],
         eligible_positions=eligible or {pos},
         availability=availability,
         injury_note=status,
+        opponent=game.opponent if game else None,
+        game_status=game.status if game else "",
         kickoff=kickoff,
         projection=proj.get(str(pid)),
+        actual_points=actual.get(str(pid)),
         slot=slot,
     )
-
-
-def _kickoffs(session: requests.Session, season: int, week: int) -> dict[str, datetime]:
-    try:
-        r = session.get(
-            "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
-            params={"week": week, "seasontype": 2, "dates": season}, timeout=20)
-        r.raise_for_status()
-        out: dict[str, datetime] = {}
-        for game in r.json().get("events", []):
-            start = datetime.fromisoformat(game["date"].replace("Z", "+00:00"))
-            for comp in game.get("competitions", [{}])[0].get("competitors", []):
-                abbr = comp.get("team", {}).get("abbreviation")
-                if abbr:
-                    out[abbr] = start
-        return out
-    except Exception:
-        return {}
