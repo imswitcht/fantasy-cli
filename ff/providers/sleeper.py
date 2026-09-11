@@ -27,7 +27,7 @@ import requests
 
 from ..models import (Availability, LineupPlan, MatchupSummary, Player, Roster,
                      Slot, TeamRef)
-from ..schedule import GameInfo, fetch_nfl_schedule
+from ..schedule import GameInfo, fetch_nfl_schedule, normalize_team_abbr
 from .base import Capabilities, NotSupported, Provider, ProviderError
 
 API = "https://api.sleeper.app/v1"
@@ -328,7 +328,7 @@ def _build(pid: str, catalog: dict, proj: dict[str, float], actual: dict[str, fl
         pos = "DEF"
     eligible = {p.upper().replace("DST", "DEF")
                 for p in (meta.get("fantasy_positions") or [pos])}
-    team_abbr = meta.get("team")
+    team_abbr = normalize_team_abbr(meta.get("team"))
     status = meta.get("injury_status")
     availability = INJURY_MAP.get(status, Availability.ACTIVE if status is None
                                   else Availability.QUESTIONABLE)
@@ -348,6 +348,7 @@ def _build(pid: str, catalog: dict, proj: dict[str, float], actual: dict[str, fl
         injury_note=status,
         opponent=game.opponent if game else None,
         game_status=game.status if game else "",
+        game_score=game.score if game else "",
         kickoff=kickoff,
         projection=proj.get(str(pid)),
         actual_points=actual.get(str(pid)),

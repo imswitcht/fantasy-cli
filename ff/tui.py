@@ -30,6 +30,7 @@ Requires `textual`, which is an optional dependency (see requirements.txt) --
 """
 from __future__ import annotations
 
+import webbrowser
 from typing import Optional
 
 from textual import events, work
@@ -130,7 +131,10 @@ class PlayerRow(Horizontal):
         proj = f"{p.projection:.1f}" if p.projection is not None else "-"
         actual = f"{p.actual_points:.1f}" if p.actual_points is not None else "-"
         opp = f"@{p.opponent}" if p.opponent else "-"
-        status = p.game_status or "-"
+        if p.game_score:
+            status = f"{p.game_score} {p.game_status}".strip()
+        else:
+            status = p.game_status or "-"
         yield Label(p.position, classes=f"badge {badge_cls}")
         yield PlayerNameLabel(p)
         yield Label(p.nfl_team or "-", classes="player-team")
@@ -201,6 +205,32 @@ class SwapConfirmScreen(ModalScreen[bool]):
         self.dismiss(False)
 
 
+class NewsItemLabel(Static):
+    """One clickable entry in the info panel: a clip/news headline or the
+    player-card link. Clicking opens the real URL in the system browser --
+    nothing here is simulated or guessed at, so a missing url just means no
+    click handler rather than a dead link."""
+
+    def __init__(self, headline: str, description: str = "",
+                url: Optional[str] = None) -> None:
+        self._url = url
+        text = f"• {headline}"
+        if description and description != headline:
+            text += f"\n  [dim]{description}[/dim]"
+        classes = "news-item" + (" clickable-news" if url else "")
+        super().__init__(text, classes=classes)
+
+    def on_click(self, event: events.Click) -> None:
+        if not self._url:
+            return
+        event.stop()
+        try:
+            webbrowser.open(self._url)
+            self.app.notify("Opened in browser.")
+        except Exception as e:
+            self.app.notify(f"Couldn't open browser: {e}", severity="error")
+
+
 class PlayerInfoScreen(ModalScreen):
     """Read-only player info: bio always, ESPN clips + player-card link when available."""
 
@@ -226,42 +256,55 @@ class PlayerInfoScreen(ModalScreen):
             proj = f"{p.projection:.1f}" if p.projection is not None else "-"
             actual = f"{p.actual_points:.1f}" if p.actual_points is not None else "-"
             yield Label(f"Projected: {proj}  ·  Scored: {actual}", classes="info-line")
-            yield Static(id="info-extra")
+            yield Vertical(id="info-extra")
             with Horizontal(id="info-buttons"):
                 yield Button("Close", id="close", variant="primary")
 
     def on_mount(self) -> None:
-        extra = self.query_one("#info-extra", Static)
+        extra = self.query_one("#info-extra", Vertical)
         if self._provider_name == "espn":
-            extra.update("[dim]Loading ESPN clips...[/dim]")
+            extra.mount(Label("[dim]Loading ESPN clips...[/dim]", classes="news-item"))
             self.load_espn_extra()
         else:
-            extra.update("[dim]No news/clips feed available from this platform.[/dim]")
+            extra.mount(Label("[dim]No news/clips feed available from this platform.[/dim]",
+                              classes="news-item"))
 
     @work(thread=True)
     def load_espn_extra(self) -> None:
         prov, err = self._reg.try_get("espn")
         if prov is None or not hasattr(prov, "player_info"):
-            self.app.call_from_thread(
-                self._show_extra, f"[red]{err or 'ESPN unavailable'}[/red]")
+            self.app.call_from_thread(self._show_error, err or "ESPN unavailable")
             return
         try:
             info = prov.player_info(self._player.platform_id)
         except Exception as e:
-            self.app.call_from_thread(
-                self._show_extra, f"[red]Couldn't load ESPN info: {e}[/red]")
+            self.app.call_from_thread(self._show_error, f"Couldn't load ESPN info: {e}")
             return
-        lines = [f"• {headline}" for headline, _ in info["videos"] if headline]
-        text = "\n".join(lines) or "[dim]No recent ESPN clips.[/dim]"
-        if info.get("player_url"):
-            text += f"\n\n[dim]{info['player_url']}[/dim]"
-        self.app.call_from_thread(self._show_extra, text)
+        self.app.call_from_thread(self._render_extra, info)
 
-    def _show_extra(self, text: str) -> None:
+    def _show_error(self, msg: str) -> None:
         try:
-            self.query_one("#info-extra", Static).update(text)
+            extra = self.query_one("#info-extra", Vertical)
         except Exception:
-            pass  # dialog may already be closed
+            return  # dialog may already be closed
+        extra.remove_children()
+        extra.mount(Label(f"[red]{msg}[/red]", classes="news-item"))
+
+    def _render_extra(self, info: dict) -> None:
+        try:
+            extra = self.query_one("#info-extra", Vertical)
+        except Exception:
+            return  # dialog may already be closed
+        extra.remove_children()
+        items = info.get("items") or []
+        if not items:
+            extra.mount(Label("[dim]No recent ESPN clips.[/dim]", classes="news-item"))
+        for item in items:
+            extra.mount(NewsItemLabel(item["headline"], item.get("description", ""),
+                                      item.get("url")))
+        if info.get("player_url"):
+            extra.mount(NewsItemLabel("View full player page on ESPN.com",
+                                      url=info["player_url"]))
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss()
@@ -450,12 +493,14 @@ class MatchupPlayerRow(Horizontal):
     def compose(self) -> ComposeResult:
         p = self.player
         badge_cls = POSITION_CSS_CLASS.get(p.position, "pos-def")
-        proj = f"{p.projection:.1f}" if p.projection is not None else "-"
-        actual = f"{p.actual_points:.1f}" if p.actual_points is not None else "-"
         yield Label(p.position, classes=f"badge {badge_cls}")
         yield Label(p.name, classes="matchup-player-name")
         yield Static(avail_style(p), classes="matchup-player-avail")
-        yield Label(f"{actual}/{proj}", classes="matchup-player-pts")
+        if p.actual_points is not None:
+            yield Label(f"{p.actual_points:.1f}", classes="matchup-player-pts")
+        else:
+            proj = f"{p.projection:.1f}" if p.projection is not None else "-"
+            yield Label(proj, classes="matchup-player-pts matchup-player-pts-proj")
 
 
 class MatchupView(VerticalScroll):

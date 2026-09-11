@@ -110,8 +110,9 @@ TabbedContent Tab.-active {
     /* text-overflow is the safety net: a wrapped 2nd line inside a height:1
        row is the same class of bug as an unbudgeted border -- the row's
        fixed height can't grow to fit it, so overflow must be clipped rather
-       than wrapped. Real pregame strings ("9/13 - 1:00 PM EDT") run long. */
-    width: 14;
+       than wrapped. Real pregame strings ("9/13 - 1:00 PM EDT") run long,
+       and live/final rows prepend a score ("13-10 2:51 - 3rd"). */
+    width: 16;
     text-wrap: nowrap;
     text-overflow: ellipsis;
     color: #8b93a1;
@@ -130,7 +131,9 @@ TabbedContent Tab.-active {
 }
 
 .player-avail {
-    width: 12;
+    /* Widest remaining un-abbreviated status is SUSPENDED (9 chars) --
+       Q/O cover QUESTIONABLE/OUT now, so this no longer needs 12. */
+    width: 10;
     content-align: right middle;
 }
 
@@ -197,7 +200,8 @@ PlayerInfoScreen {
 #info-dialog {
     width: 70;
     height: auto;
-    max-height: 20;
+    max-height: 30;
+    overflow-y: auto;
     background: #14171d;
     border: round #7c5cff;
     padding: 1 2;
@@ -208,8 +212,18 @@ PlayerInfoScreen {
 }
 
 #info-extra {
+    height: auto;
+}
+
+.news-item {
+    height: auto;
     padding: 0 0 1 0;
     color: #8b93a1;
+}
+
+.clickable-news:hover {
+    color: #a996ff;
+    text-style: underline;
 }
 
 #info-buttons {
@@ -285,4 +299,10 @@ PlayerInfoScreen {
     width: 10;
     content-align: right middle;
     color: #d7dce2;
+}
+
+.matchup-player-pts-proj {
+    /* Projected only, no real score yet -- same secondary-text gray used
+       for Team/Opp/Game elsewhere, not the brighter color a real score gets. */
+    color: #8b93a1;
 }

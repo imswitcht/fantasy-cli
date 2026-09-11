@@ -415,13 +415,14 @@ class TestEspnActualPointsAndScheduleParsing(unittest.TestCase):
         }
         schedule = {"KC": GameInfo(
             kickoff=datetime(2026, 9, 14, tzinfo=timezone.utc),
-            opponent="LV", status="Final", state="post")}
+            opponent="LV", status="Final", state="post", score="24-17")}
         return _parse_player(entry, week=1, schedule=schedule)
 
     def test_opponent_and_game_status_come_from_schedule(self):
         p = self._parse(stats=[])
         self.assertEqual(p.opponent, "LV")
         self.assertEqual(p.game_status, "Final")
+        self.assertEqual(p.game_score, "24-17")
 
     def test_actual_points_read_from_statsourceid_zero(self):
         p = self._parse(stats=[

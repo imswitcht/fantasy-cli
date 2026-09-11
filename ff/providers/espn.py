@@ -26,7 +26,7 @@ import requests
 
 from ..models import (Availability, LineupPlan, MatchupSummary, Player, Roster,
                      Slot, TeamRef)
-from ..schedule import GameInfo, fetch_nfl_schedule
+from ..schedule import GameInfo, fetch_nfl_schedule, normalize_team_abbr
 from .base import AuthError, Capabilities, Provider, ProviderError
 
 READ_HOST = "https://lm-api-reads.fantasy.espn.com"
@@ -230,7 +230,9 @@ class EspnProvider(Provider):
         ESPN's public API -- the news endpoint's `athlete=` query param is
         silently ignored and just returns generic top NFL news regardless of
         id, so this uses the athlete page's own "videos" list instead, which
-        genuinely is player-specific.
+        genuinely is player-specific. Each item carries its own real ESPN
+        page URL (`links.web.href`), same as the player-card link -- both
+        are meant to be opened in a real browser, not guessed at.
         """
         r = self.session.get(
             "https://site.web.api.espn.com/apis/common/v3/sports/football/nfl/athletes/"
@@ -239,12 +241,21 @@ class EspnProvider(Provider):
         )
         r.raise_for_status()
         data = r.json()
-        videos = [(v.get("headline") or "", v.get("description") or "")
-                  for v in (data.get("videos") or [])[:3]]
+        items = []
+        for v in (data.get("videos") or [])[:5]:
+            headline = v.get("headline") or ""
+            if not headline:
+                continue
+            url = ((v.get("links") or {}).get("web") or {}).get("href")
+            items.append({
+                "headline": headline,
+                "description": v.get("description") or "",
+                "url": url,
+            })
         links = (data.get("athlete") or {}).get("links") or []
         player_url = next((l.get("href") for l in links
                            if "playercard" in (l.get("rel") or [])), None)
-        return {"videos": videos, "player_url": player_url}
+        return {"items": items, "player_url": player_url}
 
     # --------------------------------------------------------------- writes
 
@@ -348,7 +359,7 @@ def _parse_player(entry: dict, week: int,
         elif source == 0:                                 # 0 = actual
             actual = stat.get("appliedTotal")
 
-    abbr = PRO_TEAM_ABBR.get(p.get("proTeamId"), None)
+    abbr = normalize_team_abbr(PRO_TEAM_ABBR.get(p.get("proTeamId"), None))
     status_raw = (p.get("injuryStatus") or "ACTIVE").upper()
     availability = INJURY_MAP.get(status_raw, Availability.UNKNOWN)
 
@@ -368,6 +379,7 @@ def _parse_player(entry: dict, week: int,
         injury_note=status_raw if availability is not Availability.ACTIVE else None,
         opponent=game.opponent if game else None,
         game_status=game.status if game else "",
+        game_score=game.score if game else "",
         kickoff=kickoff,
         projection=proj,
         actual_points=actual,

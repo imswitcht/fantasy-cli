@@ -112,6 +112,7 @@ class Player:
     injury_note: Optional[str] = None
     opponent: Optional[str] = None
     game_status: str = ""                # "" | "Sun 1:00 PM" | "2:51 - 3rd" | "Final"
+    game_score: str = ""                 # "" pregame | "13-10" (own-opponent) once underway
     kickoff: Optional[datetime] = None   # tz-aware UTC
     projection: Optional[float] = None
     actual_points: Optional[float] = None  # points actually scored so far; None pregame
