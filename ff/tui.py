@@ -7,7 +7,13 @@ authenticate yet -- see CLAUDE.md's platform table) you can click a starter
 and a bench player to swap them. That goes through the exact same
 read -> recompute -> submit -> verify path as `ff optimize --apply`
 (`ff/writer.py:commit`), gated behind a confirm dialog before anything is
-sent -- nothing here bypasses the project's normal write safety rules.
+sent -- nothing here bypasses the project's normal write safety rules. A
+manual swap is always exempt from `min_gain_to_write` (the user already
+approved that exact move by clicking Confirm); the writable teams also get an
+"Auto-optimization" switch (default ON) that gates whether `ff optimize
+--apply` / `ff autopilot --apply` may write to *that team* at all -- OFF
+skips those commands for the team entirely, leaving it solely to manual
+click-to-swap, which is unaffected either way.
 
 Requires `textual`, which is an optional dependency (see requirements.txt) --
 `ff tui` in cli.py guards the import so the rest of the tool never needs it.
@@ -21,10 +27,11 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import (Button, Footer, Header, Label, Static,
+from textual.widgets import (Button, Footer, Header, Label, Static, Switch,
                              TabbedContent, TabPane)
 
-from .config import Config, LOG_PATH, ProviderRegistry
+from .config import (Config, LOG_PATH, ProviderRegistry,
+                     load_auto_optimize_overrides, set_auto_optimize_override)
 from .display import avail_style, display_key, enrich
 from .models import LineupPlan, Move, Player, Roster, TeamRef
 from .optimizer import validate_plan
@@ -192,6 +199,17 @@ class RosterView(VerticalScroll):
             f"[bold]{t.nickname}[/bold]  [dim]{t.provider} · week {week} · "
             f"projected {roster.projected_total:.1f}[/dim]")
 
+        if writable and not self.query("#controls"):
+            enabled = load_auto_optimize_overrides().get(t.key, True)
+            self.mount(
+                Horizontal(
+                    Label("Auto-optimization", classes="section-label"),
+                    Switch(value=enabled, id="auto-optimize-switch"),
+                    id="controls",
+                ),
+                after=self.query_one("#summary"),
+            )
+
         starters_box = self.query_one("#starters", Vertical)
         starters_box.remove_children()
         for p in sorted(roster.starters, key=display_key):
@@ -203,6 +221,17 @@ class RosterView(VerticalScroll):
         for p in bench_players:
             bench_box.mount(PlayerRow(p, writable=writable))
         self.query_one("#bench-label", Label).update(f"BENCH ({len(bench_players)})")
+
+    def on_switch_changed(self, message: Switch.Changed) -> None:
+        if message.switch.id != "auto-optimize-switch":
+            return
+        set_auto_optimize_override(self._team.key, message.value)
+        if message.value:
+            self.app.notify(f"Auto-optimization ON for {self._team.nickname} "
+                            "-- ff optimize/autopilot --apply may write to this team.")
+        else:
+            self.app.notify(f"Auto-optimization OFF for {self._team.nickname} "
+                            "-- left solely to your manual click-to-swap.")
 
     # ------------------------------------------------------------ swapping
 
@@ -258,8 +287,13 @@ class RosterView(VerticalScroll):
                 self.app.notify, err or "Provider unavailable", severity="error")
             return
         try:
+            # min_gain=-inf: min_gain_to_write exists to stop the *optimizer*
+            # suggesting churn for negligible gain. A manual swap was already
+            # approved by the user clicking Confirm on this exact pair, so it
+            # shouldn't be second-guessed by that threshold too -- commit()
+            # still keeps its is_noop and re-checked-locked-player guards.
             commit(prov, t, _swap_planner(pid_a, pid_b), self._week,
-                   log_path=LOG_PATH)
+                   log_path=LOG_PATH, min_gain=float("-inf"))
         except (WriteRefused, VerificationFailed, NotSupported, ProviderError) as e:
             self.app.call_from_thread(self.app.notify, str(e), severity="error")
             return

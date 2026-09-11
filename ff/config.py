@@ -5,6 +5,7 @@ is safe to keep around -- league and team ids are not sensitive.
 """
 from __future__ import annotations
 
+import json
 import os
 import threading
 import tomllib
@@ -21,6 +22,30 @@ ENV_PATH = ROOT / ".env"
 CACHE_DIR = ROOT / ".cache"
 SECRETS_DIR = ROOT / "secrets"
 LOG_PATH = ROOT / "changes.log"
+AUTO_OPTIMIZE_OVERRIDES_PATH = CACHE_DIR / "auto_optimize_overrides.json"
+
+
+def load_auto_optimize_overrides() -> dict[str, bool]:
+    """Per-team auto-optimization on/off, keyed by TeamRef.key.
+
+    ON (default, missing entries count as True): `ff optimize --apply` /
+    `ff autopilot --apply` may write to this team, still gated by config.toml's
+    min_gain_to_write as always. OFF: those commands skip this team entirely --
+    lineup changes are left solely to the user's manual TUI swaps.
+
+    Lives outside config.toml on purpose: config.toml is hand-edited and
+    tomllib can't write it back without losing the user's comments.
+    """
+    if not AUTO_OPTIMIZE_OVERRIDES_PATH.exists():
+        return {}
+    return json.loads(AUTO_OPTIMIZE_OVERRIDES_PATH.read_text())
+
+
+def set_auto_optimize_override(team_key: str, enabled: bool) -> None:
+    overrides = load_auto_optimize_overrides()
+    overrides[team_key] = enabled
+    CACHE_DIR.mkdir(exist_ok=True)
+    AUTO_OPTIMIZE_OVERRIDES_PATH.write_text(json.dumps(overrides))
 
 
 def load_env(path: Path = ENV_PATH) -> None:

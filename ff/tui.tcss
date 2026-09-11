@@ -39,6 +39,21 @@ TabbedContent Tab.-active {
     margin: 1 1 0 2;
 }
 
+#controls {
+    height: auto;
+    padding: 0 2;
+    align: left middle;
+}
+
+#controls Label {
+    margin: 0 1 0 0;
+    padding-top: 1;
+}
+
+#controls Switch {
+    margin-top: 0;
+}
+
 #bench-rows {
     padding: 0 1;
 }
@@ -46,7 +61,6 @@ TabbedContent Tab.-active {
 .player-row {
     height: 1;
     background: #181b21;
-    border-bottom: solid #21252d;
     padding: 0 1;
     align: left middle;
 }
@@ -56,8 +70,7 @@ TabbedContent Tab.-active {
 }
 
 .player-row.selected {
-    background: #212430;
-    border-bottom: solid #7c5cff;
+    background: #2a2450;
 }
 
 .badge {

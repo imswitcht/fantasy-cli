@@ -7,7 +7,7 @@ from typing import Optional
 import click
 
 from .ui import Panel, Table, Text, console
-from .config import LOG_PATH, Config, ProviderRegistry
+from .config import LOG_PATH, Config, ProviderRegistry, load_auto_optimize_overrides
 from .display import WRITE_BADGE, avail_style, display_key, enrich
 from .models import LineupPlan, Roster, TeamRef
 from .optimizer import plan_inactive_swaps, plan_optimal, sub_pairings
@@ -213,6 +213,7 @@ def _render_plan(plan: LineupPlan, provider: Provider) -> None:
 
 def _run_planner(planner, week, team_filter, apply_it, mode_label):
     cfg, reg = _load()
+    overrides = load_auto_optimize_overrides()
     any_written = False
     for t in cfg.teams:
         if team_filter and team_filter.lower() not in t.nickname.lower():
@@ -233,6 +234,11 @@ def _run_planner(planner, week, team_filter, apply_it, mode_label):
         _render_plan(plan, prov)
 
         if not apply_it or plan.is_noop:
+            continue
+
+        if not overrides.get(t.key, True):
+            console.print(f"  [dim]Auto-optimization is off for {t.nickname} -- "
+                          "left to your discretion.[/dim]\n")
             continue
 
         caps = prov.capabilities

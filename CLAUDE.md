@@ -70,6 +70,18 @@ Enforced in three layers, all of which must stay:
   projected point change before calling `ff/writer.py`'s `commit()` — the same
   read → recompute → submit → verify path `--apply` uses. Don't add a way to
   skip that confirm step.
+- Manual TUI swaps always pass `min_gain=float("-inf")` to `commit()` — the
+  confirm dialog is the approval, so `min_gain_to_write` never re-judges a
+  swap the user already clicked Confirm on.
+- Each writable team's page also has an "Auto-optimization" switch (default
+  ON). OFF makes `ff optimize --apply` / `ff autopilot --apply` skip that team
+  entirely, leaving it solely to the user's manual click-to-swap — it has no
+  effect on manual swaps either way. Per-team state lives in
+  `.cache/auto_optimize_overrides.json`, not `config.toml` (tomllib can't
+  write TOML back without losing the user's comments) — see
+  `ff/config.py:load_auto_optimize_overrides`. When ON, `min_gain_to_write`
+  from `config.toml` still applies exactly as before; this switch is a
+  separate on/off gate, not a floor adjustment.
 
 ## Testing
 
