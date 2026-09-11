@@ -29,10 +29,6 @@ TabbedContent Tab.-active {
     padding: 1 2 0 2;
 }
 
-#starters {
-    padding: 0 1;
-}
-
 .section-label {
     color: #8b93a1;
     text-style: bold;
@@ -54,11 +50,11 @@ TabbedContent Tab.-active {
     margin-top: 0;
 }
 
-#bench-rows {
-    padding: 0 1;
-}
-
 .player-row {
+    /* The only source of left/right inset for a row -- #starters/#bench-rows
+       deliberately have none, so a row lines up with .column-header (which
+       has exactly this same padding). Double-padding both levels is what
+       threw the header out of alignment with the data columns. */
     height: 1;
     background: #181b21;
     padding: 0 1;
@@ -89,7 +85,9 @@ TabbedContent Tab.-active {
 .pos-def { background: #5b6b8c; }
 
 .player-name {
-    width: 1fr;
+    width: 18;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
     color: #f2f4f7;
 }
 
@@ -109,7 +107,13 @@ TabbedContent Tab.-active {
 }
 
 .player-game {
-    width: 12;
+    /* text-overflow is the safety net: a wrapped 2nd line inside a height:1
+       row is the same class of bug as an unbudgeted border -- the row's
+       fixed height can't grow to fit it, so overflow must be clipped rather
+       than wrapped. Real pregame strings ("9/13 - 1:00 PM EDT") run long. */
+    width: 14;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
     color: #8b93a1;
 }
 
