@@ -29,6 +29,16 @@ TabbedContent Tab.-active {
     padding: 1 2 0 2;
 }
 
+#starters, #bench-rows {
+    /* Without an explicit width, these Vertical containers don't reliably
+       stretch to the full RosterView width the way a plain Horizontal
+       (.column-header) does -- verified live (100-wide RosterView, but
+       #starters measuring 97) -- so PlayerRow's fr-sized columns end up
+       computed against a smaller base than ColumnHeader's, offsetting
+       every column after the first flexible one. */
+    width: 100%;
+}
+
 .section-label {
     color: #8b93a1;
     text-style: bold;
@@ -85,7 +95,12 @@ TabbedContent Tab.-active {
 .pos-def { background: #5b6b8c; }
 
 .player-name {
-    width: 18;
+    /* Flexes with the terminal width -- the two fixed-format-number/badge
+       columns either side don't benefit from extra space, so Name and Game
+       are the ones that absorb whatever room a wider window has to give,
+       and are the first to give it back on a narrower one. */
+    width: 2fr;
+    min-width: 12;
     text-wrap: nowrap;
     text-overflow: ellipsis;
     color: #f2f4f7;
@@ -111,8 +126,10 @@ TabbedContent Tab.-active {
        row is the same class of bug as an unbudgeted border -- the row's
        fixed height can't grow to fit it, so overflow must be clipped rather
        than wrapped. Real pregame strings ("9/13 - 1:00 PM EDT") run long,
-       and live/final rows prepend a score ("13-10 2:51 - 3rd"). */
-    width: 16;
+       and live/final rows prepend a score ("13-10 2:51 - 3rd"). Flexes with
+       Name -- see the comment there. */
+    width: 1fr;
+    min-width: 12;
     text-wrap: nowrap;
     text-overflow: ellipsis;
     color: #8b93a1;
