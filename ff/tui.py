@@ -37,13 +37,13 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import (Button, Footer, Header, Label, Static, Switch,
-                             TabbedContent, TabPane)
+from textual.widgets import (Button, Footer, Header, Label, Select, Static,
+                             Switch, TabbedContent, TabPane)
 
 from .config import (Config, LOG_PATH, ProviderRegistry,
                      load_auto_optimize_overrides, set_auto_optimize_override)
 from .display import avail_style, display_key, enrich
-from .models import LineupPlan, Move, Player, Roster, TeamRef
+from .models import LineupPlan, MatchupSummary, Move, Player, Roster, TeamRef
 from .optimizer import validate_plan
 from .providers.base import NotSupported, ProviderError
 from .writer import VerificationFailed, WriteRefused, commit
@@ -435,6 +435,159 @@ class RosterView(VerticalScroll):
         self.app.call_from_thread(self.load_roster)
 
 
+class MatchupPlayerRow(Horizontal):
+    """One player inside a Matchup column: badge, name, status, scored/proj.
+
+    Deliberately lighter than PlayerRow -- Team/Opponent/Game don't fit two
+    columns side by side, and this view is read-only (no Move, no name-click
+    info panel; nothing here writes anything).
+    """
+
+    def __init__(self, player: Player) -> None:
+        self.player = player
+        super().__init__(classes="matchup-player-row")
+
+    def compose(self) -> ComposeResult:
+        p = self.player
+        badge_cls = POSITION_CSS_CLASS.get(p.position, "pos-def")
+        proj = f"{p.projection:.1f}" if p.projection is not None else "-"
+        actual = f"{p.actual_points:.1f}" if p.actual_points is not None else "-"
+        yield Label(p.position, classes=f"badge {badge_cls}")
+        yield Label(p.name, classes="matchup-player-name")
+        yield Static(avail_style(p), classes="matchup-player-avail")
+        yield Label(f"{actual}/{proj}", classes="matchup-player-pts")
+
+
+class MatchupView(VerticalScroll):
+    """One league's weekly scoreboard: week cycler, matchup picker, two rosters."""
+
+    MIN_WEEK = 1
+    MAX_WEEK = 18
+
+    def __init__(self, team: TeamRef, reg: ProviderRegistry) -> None:
+        self._team = team
+        self._reg = reg
+        self._week = 1
+        self._matchups: list[MatchupSummary] = []
+        super().__init__()
+
+    def compose(self) -> ComposeResult:
+        with Horizontal(id="week-cycler"):
+            yield Button("<", id="week-prev")
+            yield Label("Week", id="week-label")
+            yield Button(">", id="week-next")
+        yield Select([], id="matchup-select", prompt="Loading matchups...",
+                    allow_blank=True)
+        with Horizontal(id="matchup-columns"):
+            yield Vertical(id="home-column", classes="matchup-column")
+            yield Vertical(id="away-column", classes="matchup-column")
+
+    def on_mount(self) -> None:
+        prov, _ = self._reg.try_get(self._team.provider)
+        if prov is not None:
+            try:
+                self._week = prov.current_week()
+            except Exception:
+                pass
+        self.load_matchups()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "week-prev":
+            self._week = max(self.MIN_WEEK, self._week - 1)
+            self.load_matchups()
+        elif event.button.id == "week-next":
+            self._week = min(self.MAX_WEEK, self._week + 1)
+            self.load_matchups()
+
+    @work(exclusive=True, thread=True)
+    def load_matchups(self) -> None:
+        t = self._team
+        try:
+            prov, err = self._reg.try_get(t.provider)
+            if prov is None or not hasattr(prov, "get_matchups"):
+                raise RuntimeError(err or "Matchups aren't available for this platform.")
+            matchups = prov.get_matchups(t.league_id, self._week)
+        except Exception as e:
+            self.app.call_from_thread(self._show_error, str(e))
+            return
+        self.app.call_from_thread(self._render_matchup_list, matchups)
+
+    def _show_error(self, msg: str) -> None:
+        self.query_one("#week-label", Label).update(f"Week {self._week}")
+        select = self.query_one("#matchup-select", Select)
+        select.set_options([])
+        select.prompt = msg
+
+    def _render_matchup_list(self, matchups: list[MatchupSummary]) -> None:
+        self._matchups = matchups
+        self.query_one("#week-label", Label).update(f"Week {self._week}")
+
+        options = []
+        default_value = None
+        for i, m in enumerate(matchups):
+            label = (f"{m.home_name} ({m.home_score:.1f}) vs "
+                    f"{m.away_name} ({m.away_score:.1f})")
+            options.append((label, i))
+            if self._team.team_id in (m.home_team_id, m.away_team_id):
+                default_value = i
+
+        select = self.query_one("#matchup-select", Select)
+        select.set_options(options)
+        if not options:
+            select.prompt = "No matchups found for this week."
+            return
+        select.value = default_value if default_value is not None else 0
+
+    def on_select_changed(self, message: Select.Changed) -> None:
+        if message.select.id != "matchup-select":
+            return
+        idx = message.value
+        if not isinstance(idx, int) or idx >= len(self._matchups):
+            return
+        self.load_matchup_rosters(self._matchups[idx])
+
+    @work(exclusive=True, thread=True)
+    def load_matchup_rosters(self, m: MatchupSummary) -> None:
+        t = self._team
+        prov, err = self._reg.try_get(t.provider)
+        if prov is None:
+            self.app.call_from_thread(
+                self.app.notify, err or "Provider unavailable", severity="error")
+            return
+        try:
+            home_ref = TeamRef(provider=t.provider, league_id=t.league_id,
+                               team_id=m.home_team_id, nickname=m.home_name)
+            away_ref = TeamRef(provider=t.provider, league_id=t.league_id,
+                               team_id=m.away_team_id, nickname=m.away_name)
+            home_roster = prov.get_roster(home_ref, self._week)
+            enrich(self._reg, t.provider, home_roster, self._week)
+            away_roster = prov.get_roster(away_ref, self._week)
+            enrich(self._reg, t.provider, away_roster, self._week)
+        except Exception as e:
+            self.app.call_from_thread(
+                self.app.notify, f"Couldn't load matchup rosters: {e}", severity="error")
+            return
+        self.app.call_from_thread(self._render_matchup_rosters, m, home_roster, away_roster)
+
+    def _render_matchup_rosters(self, m: MatchupSummary, home_roster: Roster,
+                                away_roster: Roster) -> None:
+        home_col = self.query_one("#home-column", Vertical)
+        home_col.remove_children()
+        home_col.mount(Label(f"[bold]{m.home_name}[/bold]  "
+                             f"{home_roster.projected_total:.1f}",
+                             classes="matchup-team-label"))
+        for p in sorted(home_roster.starters, key=display_key):
+            home_col.mount(MatchupPlayerRow(p))
+
+        away_col = self.query_one("#away-column", Vertical)
+        away_col.remove_children()
+        away_col.mount(Label(f"[bold]{m.away_name}[/bold]  "
+                             f"{away_roster.projected_total:.1f}",
+                             classes="matchup-team-label"))
+        for p in sorted(away_roster.starters, key=display_key):
+            away_col.mount(MatchupPlayerRow(p))
+
+
 class FantasyTUI(App):
     """Sleeper-styled roster browser, with click-to-swap where writes are safe."""
 
@@ -458,13 +611,30 @@ class FantasyTUI(App):
             with TabbedContent():
                 for i, t in enumerate(self.cfg.teams):
                     with TabPane(f"{t.nickname} ({t.provider})", id=f"team-{i}"):
-                        yield RosterView(t, self.reg)
+                        with TabbedContent(id=f"team-{i}-tabs"):
+                            with TabPane("Roster", id=f"team-{i}-roster"):
+                                yield RosterView(t, self.reg)
+                            prov, _ = self.reg.try_get(t.provider)
+                            if prov is not None and hasattr(prov, "get_matchups"):
+                                with TabPane("Matchup", id=f"team-{i}-matchup"):
+                                    yield MatchupView(t, self.reg)
         yield Footer()
 
     def action_refresh_active(self) -> None:
         tabs = self.query(TabbedContent)
         if not tabs:
             return
-        pane = tabs.first().active_pane
-        if pane is not None:
-            pane.query_one(RosterView).load_roster()
+        outer_pane = tabs.first().active_pane
+        if outer_pane is None:
+            return
+        inner_tabs = outer_pane.query(TabbedContent)
+        inner_pane = inner_tabs.first().active_pane if inner_tabs else None
+        target = inner_pane if inner_pane is not None else outer_pane
+
+        rosters = target.query(RosterView)
+        if rosters:
+            rosters.first().load_roster()
+            return
+        matchups = target.query(MatchupView)
+        if matchups:
+            matchups.first().load_matchups()

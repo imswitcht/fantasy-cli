@@ -25,7 +25,8 @@ from typing import Any, Optional
 
 import requests
 
-from ..models import Availability, LineupPlan, Player, Roster, Slot, TeamRef
+from ..models import (Availability, LineupPlan, MatchupSummary, Player, Roster,
+                     Slot, TeamRef)
 from ..schedule import GameInfo, fetch_nfl_schedule
 from .base import Capabilities, NotSupported, Provider, ProviderError
 
@@ -206,6 +207,46 @@ class SleeperProvider(Provider):
                              if SLOT_MAP.get(p, Slot.BENCH).is_starting],
             ))
         return refs
+
+    def get_matchups(self, league_id: str, week: int) -> list[MatchupSummary]:
+        """Every head-to-head pairing in the league for one week."""
+        matchups = self._get(f"{API}/league/{league_id}/matchups/{week}")
+        rosters = self._get(f"{API}/league/{league_id}/rosters")
+        users = self._get(f"{API}/league/{league_id}/users")
+
+        owner_by_roster = {str(r.get("roster_id")): r.get("owner_id") for r in rosters}
+        name_by_user = {}
+        for u in users or []:
+            uid = u.get("user_id")
+            name_by_user[uid] = ((u.get("metadata") or {}).get("team_name")
+                                 or u.get("display_name") or "Unknown")
+
+        def team_name(roster_id) -> str:
+            owner = owner_by_roster.get(str(roster_id))
+            return name_by_user.get(owner, f"Roster {roster_id}")
+
+        by_matchup_id: dict[Any, list[dict]] = {}
+        for row in matchups or []:
+            mid = row.get("matchup_id")
+            if mid is None:
+                continue  # bye week -- no opponent
+            by_matchup_id.setdefault(mid, []).append(row)
+
+        out: list[MatchupSummary] = []
+        for rows in by_matchup_id.values():
+            if len(rows) != 2:
+                continue
+            home, away = rows
+            out.append(MatchupSummary(
+                week=week,
+                home_team_id=str(home.get("roster_id")),
+                home_name=team_name(home.get("roster_id")),
+                home_score=home.get("points") or 0.0,
+                away_team_id=str(away.get("roster_id")),
+                away_name=team_name(away.get("roster_id")),
+                away_score=away.get("points") or 0.0,
+            ))
+        return out
 
     def get_roster(self, team: TeamRef, week: Optional[int] = None) -> Roster:
         week = week or self.current_week()

@@ -57,17 +57,24 @@ class TestAvailStyle(unittest.TestCase):
         self.assertEqual(avail_style(p).plain, "")
 
     def test_out_and_ir_and_bye_are_red(self):
-        for status in (Availability.OUT, Availability.INJURED_RESERVE,
-                       Availability.SUSPENDED, Availability.BYE,
-                       Availability.DOUBTFUL):
+        # OUT is abbreviated to "O"; the others still show their full value.
+        expected_text = {
+            Availability.OUT: "O",
+            Availability.INJURED_RESERVE: Availability.INJURED_RESERVE.value,
+            Availability.SUSPENDED: Availability.SUSPENDED.value,
+            Availability.BYE: Availability.BYE.value,
+            Availability.DOUBTFUL: Availability.DOUBTFUL.value,
+        }
+        for status, text_expected in expected_text.items():
             p = mk("Hurt", "RB", Slot.RB, avail=status)
             text = avail_style(p)
-            self.assertEqual(text.plain, status.value)
+            self.assertEqual(text.plain, text_expected)
             self.assertEqual(text.style, "red", msg=f"{status} should be red")
 
-    def test_questionable_is_yellow(self):
+    def test_questionable_is_yellow_and_abbreviated(self):
         p = mk("Iffy", "TE", Slot.TE, avail=Availability.QUESTIONABLE)
         text = avail_style(p)
+        self.assertEqual(text.plain, "Q")
         self.assertEqual(text.style, "yellow")
 
 

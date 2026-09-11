@@ -224,6 +224,19 @@ class TeamRef:
 
 
 @dataclass
+class MatchupSummary:
+    """One head-to-head pairing for a league/week (ff tui's Matchup view)."""
+
+    week: int
+    home_team_id: str
+    home_name: str
+    home_score: float
+    away_team_id: str
+    away_name: str
+    away_score: float
+
+
+@dataclass
 class Move:
     """One player changing slots. The unit of a lineup diff."""
 

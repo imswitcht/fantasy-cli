@@ -49,11 +49,17 @@ AVAILABILITY_COLORS = {
 }
 
 
+AVAILABILITY_ABBREV = {
+    Availability.QUESTIONABLE: "Q",
+    Availability.OUT: "O",
+}
+
+
 def avail_style(p: Player) -> Text:
     if p.availability is Availability.ACTIVE:
         return Text("")
-    return Text(p.availability.value,
-                style=AVAILABILITY_COLORS.get(p.availability, "dim"))
+    text = AVAILABILITY_ABBREV.get(p.availability, p.availability.value)
+    return Text(text, style=AVAILABILITY_COLORS.get(p.availability, "dim"))
 
 
 # Platforms return roster entries in their own internal order, which reads as

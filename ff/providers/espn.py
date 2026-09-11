@@ -24,7 +24,8 @@ from typing import Any, Optional
 
 import requests
 
-from ..models import Availability, LineupPlan, Player, Roster, Slot, TeamRef
+from ..models import (Availability, LineupPlan, MatchupSummary, Player, Roster,
+                     Slot, TeamRef)
 from ..schedule import GameInfo, fetch_nfl_schedule
 from .base import AuthError, Capabilities, Provider, ProviderError
 
@@ -188,6 +189,36 @@ class EspnProvider(Provider):
             if p:
                 players.append(p)
         return Roster(players=players)
+
+    def get_matchups(self, league_id: str, week: int) -> list[MatchupSummary]:
+        """Every head-to-head pairing in the league for one week.
+
+        Reuses mMatchupScore -- already one of get_roster's views -- at the
+        league level instead of filtered to one team: its `schedule` array
+        covers the whole season, so this just filters to `matchupPeriodId`.
+        """
+        data = self._get(league_id, ["mMatchupScore", "mTeam", "mSettings"],
+                         {"scoringPeriodId": week})
+        names = {t.get("id"): t.get("name") or f"Team {t.get('id')}"
+                 for t in data.get("teams", [])}
+        out: list[MatchupSummary] = []
+        for m in data.get("schedule", []):
+            if m.get("matchupPeriodId") != week:
+                continue
+            home = m.get("home") or {}
+            away = m.get("away") or {}
+            if not home or not away:
+                continue  # bye week in an odd-team-count league
+            out.append(MatchupSummary(
+                week=week,
+                home_team_id=str(home.get("teamId")),
+                home_name=names.get(home.get("teamId"), "Unknown"),
+                home_score=home.get("totalPointsLive") or home.get("totalPoints") or 0.0,
+                away_team_id=str(away.get("teamId")),
+                away_name=names.get(away.get("teamId"), "Unknown"),
+                away_score=away.get("totalPointsLive") or away.get("totalPoints") or 0.0,
+            ))
+        return out
 
     def player_info(self, platform_id: str) -> dict:
         """Best-effort ESPN clips + player-card link for the TUI info panel.

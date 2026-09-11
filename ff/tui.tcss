@@ -217,3 +217,72 @@ PlayerInfoScreen {
     align: right middle;
     padding-top: 1;
 }
+
+#week-cycler {
+    height: 3;
+    padding: 1 2 0 2;
+    align: left middle;
+}
+
+#week-cycler Button {
+    min-width: 3;
+    height: 1;
+    border: none;
+    padding: 0 1;
+    background: #2a2f3a;
+}
+
+#week-cycler Button:hover {
+    background: #7c5cff;
+}
+
+#week-label {
+    width: 10;
+    text-align: center;
+    text-style: bold;
+    color: #f2f4f7;
+}
+
+#matchup-select {
+    margin: 1 2;
+}
+
+#matchup-columns {
+    height: auto;
+    padding: 0 2;
+}
+
+.matchup-column {
+    width: 1fr;
+    padding: 0 1;
+}
+
+.matchup-team-label {
+    padding: 0 0 1 0;
+    color: #8b93a1;
+}
+
+.matchup-player-row {
+    height: 1;
+    background: #181b21;
+    padding: 0 1;
+    align: left middle;
+}
+
+.matchup-player-name {
+    width: 1fr;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+    color: #f2f4f7;
+}
+
+.matchup-player-avail {
+    width: 3;
+    content-align: right middle;
+}
+
+.matchup-player-pts {
+    width: 10;
+    content-align: right middle;
+    color: #d7dce2;
+}
